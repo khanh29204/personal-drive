@@ -3,8 +3,6 @@ name: Rust CI/CD Deployment
 on:
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/deploy.yml'
 
 env:
   REGISTRY: ghcr.io
