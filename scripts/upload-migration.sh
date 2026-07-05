@@ -109,9 +109,8 @@ while IFS= read -r dir; do
   # Bỏ qua nếu dir rỗng (trường hợp TARGET_DIR trống)
   if [ -z "$dir" ]; then continue; fi
 
-  # Tính đường dẫn tương đối
-  rel_path="${dir#$TARGET_DIR/}"
-  if [ "$rel_path" = "$dir" ]; then rel_path="${dir#$TARGET_DIR}"; fi
+  # Chỉ loại bỏ ./ ở đầu hoặc dấu / ở đầu để giữ nguyên toàn bộ cấu trúc đường dẫn
+  rel_path="${dir#./}"
   rel_path="${rel_path#/}"
   
   if [ -n "$rel_path" ]; then
@@ -130,8 +129,7 @@ while IFS= read -r file; do
     continue
   fi
 
-  rel_path="${file#$TARGET_DIR/}"
-  if [ "$rel_path" = "$file" ]; then rel_path="${file#$TARGET_DIR}"; fi
+  rel_path="${file#./}"
   rel_path="${rel_path#/}"
   
   parent_dir="${rel_path%/*}"

@@ -29,12 +29,20 @@ export const listAllUserFolders = (ownerId: string): Promise<FolderHydrated[]> =
   return FolderModel.find({ ownerId }).sort({ name: 1 });
 };
 
-export const createFolder = (params: {
+export const createFolder = async (params: {
   name: string;
   parentId: string | null;
   isPublic: boolean;
   ownerId: string;
 }): Promise<FolderHydrated> => {
+  const existing = await FolderModel.findOne({
+    name: params.name,
+    parentId: params.parentId,
+    ownerId: params.ownerId,
+  });
+  if (existing) {
+    return existing;
+  }
   return FolderModel.create(params);
 };
 
