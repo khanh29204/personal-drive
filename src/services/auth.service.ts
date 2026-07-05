@@ -1,12 +1,14 @@
 import axios, { AxiosError } from 'axios';
-import jwt from 'jsonwebtoken';
+import { verify } from 'jsonwebtoken';
 
 import { env } from '../config/env';
 import type { AuthenticatedUser } from '../types/express';
 import { unauthorized } from '../utils/httpError';
 
 interface TokenPayload {
-  id: string;
+  id?: string;
+  _id?: string;
+  userId?: string;
   userName: string;
   iat: number;
 }
@@ -19,8 +21,10 @@ interface TokenPayload {
  */
 const verifyLocal = (token: string): AuthenticatedUser => {
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET) as TokenPayload;
-    return { id: decoded.id, userName: decoded.userName };
+    const decoded = verify(token, env.JWT_SECRET) as TokenPayload;
+    const userId = decoded.id || decoded._id || decoded.userId;
+    if (!userId) throw new Error('Invalid token format');
+    return { id: userId, userName: decoded.userName };
   } catch {
     throw unauthorized();
   }
@@ -36,7 +40,9 @@ const verifyViaApi = async (token: string): Promise<AuthenticatedUser> => {
     const { data } = await axios.post<TokenPayload>(`${env.AUTH_API_BASE_URL}/auth/checkToken`, {
       token,
     });
-    return { id: data.id, userName: data.userName };
+    const userId = data.id || data._id || data.userId;
+    if (!userId) throw new Error('Invalid token format');
+    return { id: userId, userName: data.userName };
   } catch (error) {
     if (error instanceof AxiosError && error.response?.status === 401) {
       throw unauthorized();
