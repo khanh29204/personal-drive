@@ -301,6 +301,53 @@
     moveModal.style.display = 'flex';
   };
 
+  // ── Link File ──────────────────────────────────────────────────
+  var btnLinkFile = document.getElementById('btn-link-file');
+  var linkFileModal = document.getElementById('link-file-modal');
+  var linkFileForm = document.getElementById('link-file-form');
+  var btnCancelLink = document.getElementById('btn-cancel-link');
+
+  if (btnLinkFile && linkFileModal && linkFileForm) {
+    btnLinkFile.addEventListener('click', function() {
+      linkFileForm.reset();
+      linkFileModal.style.display = 'flex';
+    });
+
+    btnCancelLink.addEventListener('click', function() {
+      linkFileModal.style.display = 'none';
+    });
+
+    linkFileForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var btnSubmit = linkFileForm.querySelector('button[type="submit"]');
+      
+      var name = document.getElementById('link-name').value.trim();
+      var url = document.getElementById('link-url').value.trim();
+      var mimeType = document.getElementById('link-mime').value.trim();
+
+      if (!name || !url || !mimeType) return;
+
+      try {
+        btnSubmit.disabled = true;
+        await apiCall('/api/files/link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: name,
+            url: url,
+            mimeType: mimeType,
+            folderId: currentFolderId || null
+          })
+        });
+        showToast('Đã thêm liên kết file thành công', 'success');
+        window.location.reload();
+      } catch (err) {
+        showToast(err.message, 'error');
+        btnSubmit.disabled = false;
+      }
+    });
+  }
+
   // ── Escape HTML helper ─────────────────────────────────────────
   function escapeHtml(str) {
     var div = document.createElement('div');

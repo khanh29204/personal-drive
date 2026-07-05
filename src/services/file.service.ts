@@ -98,7 +98,11 @@ export const completeUpload = async (fileId: string, ownerId: string): Promise<F
   return file;
 };
 
-export const getDownloadUrl = async (fileId: string, viewerId?: string): Promise<string> => {
+export const getDownloadUrl = async (
+  fileId: string,
+  viewerId?: string,
+  inline: boolean = false,
+): Promise<string> => {
   const file = await FileModel.findById(fileId);
   if (!file || file.status !== 'completed') {
     throw notFound('Không tìm thấy file');
@@ -106,13 +110,49 @@ export const getDownloadUrl = async (fileId: string, viewerId?: string): Promise
   if (!file.isPublic && file.ownerId !== viewerId) {
     throw forbidden();
   }
-  return createDownloadUrl(file.key, file.name);
+  if (file.externalUrl) {
+    return file.externalUrl;
+  }
+  return createDownloadUrl(file.key, file.name, inline);
 };
 
 export const deleteFile = async (fileId: string, ownerId: string): Promise<void> => {
   const file = await getOwnedFile(fileId, ownerId);
-  await deleteObject(file.key);
+  if (!file.externalUrl) {
+    await deleteObject(file.key);
+  }
   await file.deleteOne();
+};
+
+export const createLinkedFile = async (params: {
+  name: string;
+  url: string;
+  mimeType: string;
+  folderId: string | null;
+  ownerId: string;
+}): Promise<FileHydrated> => {
+  const { name, url, mimeType, folderId, ownerId } = params;
+
+  if (folderId) {
+    await assertFolderOwnership(folderId, ownerId);
+  }
+
+  // Use a random key to satisfy uniqueness, though not used for R2.
+  const key = `linked-${ownerId}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
+  const file = await FileModel.create({
+    name,
+    key,
+    size: 0,
+    mimeType,
+    externalUrl: url,
+    folderId,
+    ownerId,
+    isPublic: false,
+    status: 'completed',
+  });
+
+  return file;
 };
 
 export const updateFile = async (

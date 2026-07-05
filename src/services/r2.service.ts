@@ -28,12 +28,26 @@ export const createUploadUrl = async (key: string, mimeType: string): Promise<st
   return getSignedUrl(r2Client, command, { expiresIn: env.R2_UPLOAD_URL_EXPIRES_IN });
 };
 
-export const createDownloadUrl = async (key: string, downloadName?: string): Promise<string> => {
+export const createDownloadUrl = async (
+  key: string,
+  downloadName?: string,
+  inline: boolean = false,
+): Promise<string> => {
+  if (inline && env.R2_PUBLIC_DOMAIN) {
+    // Trả về thẳng domain CDN tuỳ chỉnh để duyệt trực tiếp
+    const baseUrl = env.R2_PUBLIC_DOMAIN.replace(/\/$/, '');
+    return `${baseUrl}/${key}`;
+  }
+
+  const disposition = inline
+    ? `inline; filename="${encodeURIComponent(downloadName || '')}"`
+    : `attachment; filename="${encodeURIComponent(downloadName || '')}"`;
+
   const command = new GetObjectCommand({
     Bucket: env.R2_BUCKET_NAME,
     Key: key,
     ...(downloadName && {
-      ResponseContentDisposition: `attachment; filename="${encodeURIComponent(downloadName)}"`,
+      ResponseContentDisposition: disposition,
     }),
   });
   return getSignedUrl(r2Client, command, { expiresIn: env.R2_DOWNLOAD_URL_EXPIRES_IN });

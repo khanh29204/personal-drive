@@ -12,5 +12,10 @@ router.get(
   optionalAuthMiddleware,
   asyncHandler(webController.redirectToDownload),
 );
+router.get(
+  '/files/:id/view',
+  optionalAuthMiddleware,
+  asyncHandler(webController.redirectToView),
+);
 
 export default router;

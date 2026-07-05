@@ -58,6 +58,25 @@ export const deleteFile = async (req: Request, res: Response): Promise<void> => 
   res.status(204).send();
 };
 
+const linkBodySchema = z.object({
+  name: z.string().trim().min(1, 'Tên file không được để trống'),
+  url: z.string().trim().url('Đường dẫn không hợp lệ'),
+  mimeType: z.string().trim().min(1, 'mimeType không được để trống'),
+  folderId: z.string().nullable().optional(),
+});
+
+export const createLinkedFile = async (req: Request, res: Response): Promise<void> => {
+  const body = linkBodySchema.parse(req.body);
+  const result = await fileService.createLinkedFile({
+    name: body.name,
+    url: body.url,
+    mimeType: body.mimeType,
+    folderId: body.folderId ?? null,
+    ownerId: req.user!.id,
+  });
+  res.status(201).json(result);
+};
+
 export const updateFile = async (req: Request, res: Response): Promise<void> => {
   const body = updateBodySchema.parse(req.body);
   const file = await fileService.updateFile(req.params.id, req.user!.id, body);

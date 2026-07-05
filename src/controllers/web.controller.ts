@@ -60,7 +60,7 @@ export const renderHome = async (req: Request, res: Response): Promise<void> => 
     sizeRaw: file.size,
     mimeType: file.mimeType,
     modified: file.updatedAt,
-    href: `/files/${file._id}/download`,
+    href: `/files/${file._id}/view`,
     downloadHref: `/files/${file._id}/download`,
     isPublic: file.isPublic,
     isOwner: file.ownerId === viewerId,
@@ -117,6 +117,11 @@ export const renderHome = async (req: Request, res: Response): Promise<void> => 
 };
 
 export const redirectToDownload = async (req: Request, res: Response): Promise<void> => {
-  const url = await fileService.getDownloadUrl(req.params.id, req.user?.id);
+  const url = await fileService.getDownloadUrl(req.params.id, req.user?.id, false);
+  res.redirect(url);
+};
+
+export const redirectToView = async (req: Request, res: Response): Promise<void> => {
+  const url = await fileService.getDownloadUrl(req.params.id, req.user?.id, true);
   res.redirect(url);
 };

@@ -9,6 +9,7 @@ const router = Router();
 
 router.get('/', optionalAuthMiddleware, asyncHandler(fileController.listFiles));
 router.post('/upload-url', authMiddleware, asyncHandler(fileController.requestUploadUrl));
+router.post('/link', authMiddleware, asyncHandler(fileController.createLinkedFile));
 router.post('/:id/complete', authMiddleware, asyncHandler(fileController.completeUpload));
 router.get(
   '/:id/download-url',

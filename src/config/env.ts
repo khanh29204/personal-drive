@@ -28,6 +28,7 @@ const envSchema = z.object({
   R2_BUCKET_NAME: z.string().min(1, 'R2_BUCKET_NAME là bắt buộc'),
   R2_UPLOAD_URL_EXPIRES_IN: z.coerce.number().default(300),
   R2_DOWNLOAD_URL_EXPIRES_IN: z.coerce.number().default(3600),
+  R2_PUBLIC_DOMAIN: z.string().url('R2_PUBLIC_DOMAIN phải là URL hợp lệ, vd: https://cdn...').optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

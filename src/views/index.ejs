@@ -47,6 +47,9 @@
         <button id="btn-upload" class="btn-toolbar" type="button">
           <i class="fas fa-cloud-upload-alt"></i> Tải file lên
         </button>
+        <button id="btn-link-file" class="btn-toolbar" type="button">
+          <i class="fas fa-link"></i> Liên kết file
+        </button>
         <input type="file" id="file-input" multiple hidden />
       </div>
       <div id="upload-progress-area"></div>
@@ -104,7 +107,7 @@
                 <div class="file-name">
                   <i class="fas <%= item.icon %>"></i>
                   <div class="file-info-group">
-                    <a href="<%= item.href %>" class="item-link">
+                    <a href="<%= item.href %>" class="item-link" <%= !item.isDirectory ? 'target="_blank"' : '' %>>
                       <%= item.name %>
                     </a>
                     <div class="mobile-size"><%= item.sizeLabel %></div>
@@ -165,6 +168,30 @@
           <button id="btn-cancel-move" class="btn-toolbar">Hủy</button>
           <button id="btn-confirm-move" class="btn-toolbar" style="background:#2563eb; color:white;">Di chuyển</button>
         </div>
+      </div>
+    </div>
+
+    <div id="link-file-modal" class="modal" style="display:none">
+      <div class="modal-content">
+        <h3>Liên kết file bên ngoài</h3>
+        <form id="link-file-form" style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
+          <div>
+            <label>URL File:</label>
+            <input type="url" id="link-url" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" placeholder="https://..." />
+          </div>
+          <div>
+            <label>Tên hiển thị:</label>
+            <input type="text" id="link-name" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" placeholder="Tên file" />
+          </div>
+          <div>
+            <label>MimeType:</label>
+            <input type="text" id="link-mime" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" placeholder="video/mp4, image/jpeg, ..." />
+          </div>
+          <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+            <button type="button" id="btn-cancel-link" class="btn-toolbar">Hủy</button>
+            <button type="submit" class="btn-toolbar" style="background:#2563eb; color:white;">Lưu liên kết</button>
+          </div>
+        </form>
       </div>
     </div>
 

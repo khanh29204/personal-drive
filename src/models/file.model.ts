@@ -8,6 +8,7 @@ export interface FileDocument {
   key: string;
   size: number;
   mimeType: string;
+  externalUrl?: string | null;
   folderId: Types.ObjectId | null;
   ownerId: string;
   isPublic: boolean;
@@ -24,6 +25,7 @@ const fileSchema = new Schema<FileDocument>(
     key: { type: String, required: true, unique: true },
     size: { type: Number, required: true, min: 0 },
     mimeType: { type: String, required: true },
+    externalUrl: { type: String, default: null },
     folderId: { type: Schema.Types.ObjectId, ref: 'Folder', default: null, index: true },
     ownerId: { type: String, required: true, index: true },
     isPublic: { type: Boolean, default: false, index: true },

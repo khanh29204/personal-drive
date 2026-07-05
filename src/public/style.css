@@ -119,6 +119,7 @@ td {
 .file-info-group {
   display: flex;
   flex-direction: column;
+  flex: 1;
 }
 
 .item-link {
@@ -131,7 +132,7 @@ td {
 }
 
 .btn-download-wrapper {
-  margin-left: auto;
+  /* Removed margin-left: auto to let .file-info-group flex: 1 push it */
 }
 
 .btn-icon {
