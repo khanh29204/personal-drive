@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
     paths:
-      - 'rust/**'
       - '.github/workflows/deploy.yml'
 
 env:
