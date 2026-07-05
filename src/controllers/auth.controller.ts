@@ -18,10 +18,18 @@ const loginBodySchema = z.object({
  * gắn Bearer token vào header.
  */
 export const login = async (req: Request, res: Response): Promise<void> => {
+  const requireToken = req.query.token == 'true';
   const { userName, password } = loginBodySchema.parse(req.body);
   const token = await authService.loginViaApi(userName, password);
   res.cookie(env.COOKIE_NAME, token, buildAuthCookieOptions());
-  res.json({ message: 'Đăng nhập thành công' });
+  const response: {
+    message: string;
+    token?: string;
+  } = { message: 'Đăng nhập thành công' };
+  if (requireToken) {
+    response.token = token;
+  }
+  res.json(response);
 };
 
 export const logout = (_req: Request, res: Response): void => {

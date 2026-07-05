@@ -31,19 +31,23 @@ for cmd in curl jq file; do
   fi
 done
 
-# Tạo file tạm để lưu Cookie phiên đăng nhập
-COOKIE_JAR=$(mktemp)
-trap 'rm -f "$COOKIE_JAR"' EXIT
-
 echo -n "🔑 Đang đăng nhập... "
-LOGIN_RES=$(curl -s -c "$COOKIE_JAR" -X POST "$API_URL/api/auth/login" \
+LOGIN_RES=$(curl -s -X POST "$API_URL/api/auth/login?token=true" \
   -H "Content-Type: application/json" \
   -d "{\"userName\": \"$USERNAME\", \"password\": \"$PASSWORD\"}")
 
 # Kiểm tra nếu server trả về lỗi
-if echo "$LOGIN_RES" | grep -q '"message"'; then
+if echo "$LOGIN_RES" | grep -q '"message"' && ! echo "$LOGIN_RES" | grep -q '"Đăng nhập thành công"'; then
   echo "Thất bại!"
   echo "Lỗi: $LOGIN_RES"
+  exit 1
+fi
+
+# Lấy giá trị token từ JSON response
+TOKEN=$(echo "$LOGIN_RES" | jq -r '.token // empty')
+
+if [ -z "$TOKEN" ]; then
+  echo "Thất bại! Không tìm thấy token trong phản hồi trả về."
   exit 1
 fi
 echo "Thành công!"
@@ -78,7 +82,8 @@ create_folder() {
   fi
 
   local res
-  res=$(curl -s -b "$COOKIE_JAR" -X POST "$API_URL/api/folders" \
+  res=$(curl -s -X POST "$API_URL/api/folders" \
+    -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"name\": \"$folder_name\", \"parentId\": $parent_payload, \"isPublic\": false}")
   
@@ -162,7 +167,8 @@ while IFS= read -r file; do
   echo "⏳ Đang xử lý: $rel_path ($size bytes) ..."
   
   # Bước 1: Xin upload url
-  res=$(curl -s -b "$COOKIE_JAR" -X POST "$API_URL/api/files/upload-url" \
+  res=$(curl -s -X POST "$API_URL/api/files/upload-url" \
+    -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "$payload")
 
@@ -184,7 +190,8 @@ while IFS= read -r file; do
   fi
 
   # Bước 3: Xác nhận thành công
-  complete_res=$(curl -s -b "$COOKIE_JAR" -X POST "$API_URL/api/files/$file_api_id/complete")
+  complete_res=$(curl -s -X POST "$API_URL/api/files/$file_api_id/complete" \
+    -H "Authorization: Bearer $TOKEN")
   echo "  ✅ Hoàn tất!"
 
 done < <(find "$TARGET_DIR" -type f | sort)
