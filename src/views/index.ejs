@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title><%= breadcrumb.length ? breadcrumb[breadcrumb.length - 1].name : 'Personal Drive' %></title>
+    <link rel="stylesheet" href="/style.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"
+    />
+  </head>
+
+  <body>
+    <div class="container">
+      <header>
+        <div class="breadcrumb">
+          <a href="/"><i class="fas fa-home"></i> Home</a>
+          <% breadcrumb.forEach((crumb) => { %>
+          <span>/</span>
+          <a href="/?folderId=<%= crumb.id %>"><%= crumb.name %></a>
+          <% }) %>
+        </div>
+
+        <div class="auth-box">
+          <% if (user) { %>
+          <span>Xin chào, <strong><%= user.userName %></strong></span>
+          <button id="logout-btn" class="btn-icon" type="button">Đăng xuất</button>
+          <% } else { %>
+          <form id="login-form">
+            <input type="text" name="userName" placeholder="Tên đăng nhập" required />
+            <input type="password" name="password" placeholder="Mật khẩu" required />
+            <button type="submit">Đăng nhập</button>
+          </form>
+          <span id="login-error" class="login-error"></span>
+          <% } %>
+        </div>
+
+        <h1>File Explorer</h1>
+      </header>
+
+      <% if (user) { %>
+      <div class="toolbar">
+        <button id="btn-new-folder" class="btn-toolbar" type="button">
+          <i class="fas fa-folder-plus"></i> Thư mục mới
+        </button>
+        <button id="btn-upload" class="btn-toolbar" type="button">
+          <i class="fas fa-cloud-upload-alt"></i> Tải file lên
+        </button>
+        <input type="file" id="file-input" multiple hidden />
+      </div>
+      <div id="upload-progress-area"></div>
+      <% } %>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 45%">
+                <a href="/?<%= currentFolderId ? 'folderId=' + currentFolderId + '&' : '' %>sortBy=name&order=<%= sortBy === 'name' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
+                  Tên <% if (sortBy === 'name') { %><span class="sort-icon"><%= order === 'asc' ? '▲' : '▼' %></span><% } %>
+                </a>
+              </th>
+              <th style="width: 20%">
+                <a href="/?<%= currentFolderId ? 'folderId=' + currentFolderId + '&' : '' %>sortBy=type&order=<%= sortBy === 'type' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
+                  Loại <% if (sortBy === 'type') { %><span class="sort-icon"><%= order === 'asc' ? '▲' : '▼' %></span><% } %>
+                </a>
+              </th>
+              <th class="hide-size-mobile">
+                <a href="/?<%= currentFolderId ? 'folderId=' + currentFolderId + '&' : '' %>sortBy=size&order=<%= sortBy === 'size' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
+                  Kích thước <% if (sortBy === 'size') { %><span class="sort-icon"><%= order === 'asc' ? '▲' : '▼' %></span><% } %>
+                </a>
+              </th>
+              <th>
+                <a href="/?<%= currentFolderId ? 'folderId=' + currentFolderId + '&' : '' %>sortBy=date&order=<%= sortBy === 'date' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
+                  Ngày sửa <% if (sortBy === 'date') { %><span class="sort-icon"><%= order === 'asc' ? '▲' : '▼' %></span><% } %>
+                </a>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <% if (parentHref) { %>
+            <tr>
+              <td colspan="4">
+                <div class="file-name">
+                  <i class="fas fa-level-up-alt text-secondary"></i>
+                  <a href="<%= parentHref %>" class="item-link">... (Quay lại)</a>
+                </div>
+              </td>
+            </tr>
+            <% } %>
+
+            <% if (items.length === 0) { %>
+            <tr>
+              <td colspan="4" style="text-align: center; padding: 40px">
+                <span class="text-muted">Thư mục trống</span>
+              </td>
+            </tr>
+            <% } %>
+
+            <% items.forEach((item) => { %>
+            <tr>
+              <td>
+                <div class="file-name">
+                  <i class="fas <%= item.icon %>"></i>
+                  <div class="file-info-group">
+                    <a href="<%= item.href %>" class="item-link">
+                      <%= item.name %>
+                    </a>
+                    <div class="mobile-size"><%= item.sizeLabel %></div>
+                  </div>
+
+                  <% if (!item.isDirectory) { %>
+                  <div class="btn-download-wrapper">
+                    <a href="<%= item.downloadHref %>" class="btn-icon" title="Tải về máy">
+                      <i class="fas fa-download"></i>
+                    </a>
+                  </div>
+                  <% } %>
+
+                  <% if (item.isOwner) { %>
+                  <div class="row-actions">
+                    <button class="btn-icon" title="<%= item.isPublic ? 'Chuyển sang riêng tư' : 'Chuyển sang công khai' %>"
+                      onclick="togglePublic('<%= item.id %>', <%= item.isDirectory %>, <%= item.isPublic %>)">
+                      <i class="fas <%= item.isPublic ? 'fa-lock-open' : 'fa-lock' %>"></i>
+                    </button>
+                    <button class="btn-icon" title="Di chuyển"
+                      onclick="openMoveModal('<%= item.id %>', <%= item.isDirectory %>, `<%= item.name.replace(/`/g, '') %>`)">
+                      <i class="fas fa-arrows-alt"></i>
+                    </button>
+                    <button class="btn-icon btn-danger" title="Xoá"
+                      onclick="deleteItem('<%= item.id %>', '<%= item.isDirectory ? 'folder' : 'file' %>', `<%= item.name.replace(/`/g, '') %>`)">
+                      <i class="fas fa-trash"></i>
+                    </button>
+                  </div>
+                  <% } %>
+                </div>
+              </td>
+              <td class="text-sm" style="color: #4b5563">
+                <%= item.isDirectory ? 'Thư mục' : 'Tệp' %>
+              </td>
+              <td class="text-sm hide-size-mobile"><%= item.sizeLabel %></td>
+              <td class="text-sm">
+                <%= new Date(item.modified).toLocaleDateString('vi-VN') %>
+              </td>
+            </tr>
+            <% }); %>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" style="display:none"></div>
+
+    <div id="move-modal" class="modal" style="display:none">
+      <div class="modal-content">
+        <h3>Di chuyển "<span id="move-item-name"></span>"</h3>
+        <div style="margin: 16px 0;">
+          <label>Chọn thư mục đích:</label>
+          <select id="move-folder-select" style="width:100%; padding: 8px; margin-top: 8px; border-radius: 4px; border: 1px solid #d1d5db;">
+            <option value="">-- Màn hình chính --</option>
+          </select>
+        </div>
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+          <button id="btn-cancel-move" class="btn-toolbar">Hủy</button>
+          <button id="btn-confirm-move" class="btn-toolbar" style="background:#2563eb; color:white;">Di chuyển</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.__DRIVE_CONFIG__ = {
+        currentFolderId: <%- JSON.stringify(currentFolderId) %>,
+        user: <%- JSON.stringify(user) %>,
+        allFolders: <%- JSON.stringify(typeof allFolders !== 'undefined' ? allFolders : []) %>,
+      };
+    </script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
