@@ -17,6 +17,7 @@ export interface DisplayItem {
   downloadHref: string | null;
   isPublic: boolean;
   isOwner: boolean;
+  externalUrl?: string | null;
 }
 
 export const renderHome = async (req: Request, res: Response): Promise<void> => {
@@ -64,6 +65,7 @@ export const renderHome = async (req: Request, res: Response): Promise<void> => 
     downloadHref: `/files/${file._id}/download`,
     isPublic: file.isPublic,
     isOwner: file.ownerId === viewerId,
+    externalUrl: file.externalUrl,
   }));
 
   // ── sort ──────────────────────────────────────────────────────────

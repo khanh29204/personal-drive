@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title><%= breadcrumb.length ? breadcrumb[breadcrumb.length - 1].name : 'Personal Drive' %></title>
+    <title><%= breadcrumb.length ? breadcrumb[breadcrumb.length - 1].name : 'Root' %></title>
     <link rel="stylesheet" href="/style.css" />
     <link
       rel="stylesheet"
@@ -27,16 +27,18 @@
           <span>Xin chào, <strong><%= user.userName %></strong></span>
           <button id="logout-btn" class="btn-icon" type="button">Đăng xuất</button>
           <% } else { %>
-          <form id="login-form">
-            <input type="text" name="userName" placeholder="Tên đăng nhập" required />
-            <input type="password" name="password" placeholder="Mật khẩu" required />
-            <button type="submit">Đăng nhập</button>
-          </form>
-          <span id="login-error" class="login-error"></span>
+          <div id="login-form-container" style="display:none; align-items: center; gap: 8px;">
+            <form id="login-form">
+              <input type="text" name="userName" placeholder="Tên đăng nhập" required />
+              <input type="password" name="password" placeholder="Mật khẩu" required />
+              <button type="submit">Vào</button>
+            </form>
+            <span id="login-error" class="login-error"></span>
+          </div>
           <% } %>
         </div>
 
-        <h1>File Explorer</h1>
+        <h1 id="page-title" ondblclick="document.getElementById('login-form-container') && (document.getElementById('login-form-container').style.display='flex')"><%= breadcrumb.length ? breadcrumb[breadcrumb.length - 1].name : 'Root' %></h1>
       </header>
 
       <% if (user) { %>
@@ -131,6 +133,12 @@
                       onclick="openMoveModal('<%= item.id %>', <%= item.isDirectory %>, `<%= item.name.replace(/`/g, '') %>`)">
                       <i class="fas fa-arrows-alt"></i>
                     </button>
+                    <% if (item.externalUrl) { %>
+                    <button class="btn-icon" title="Sửa liên kết"
+                      onclick="openEditLinkModal('<%= item.id %>', `<%= item.name.replace(/`/g, '') %>`, `<%= item.externalUrl %>`, `<%= item.mimeType %>`)">
+                      <i class="fas fa-edit"></i>
+                    </button>
+                    <% } %>
                     <button class="btn-icon btn-danger" title="Xoá"
                       onclick="deleteItem('<%= item.id %>', '<%= item.isDirectory ? 'folder' : 'file' %>', `<%= item.name.replace(/`/g, '') %>`)">
                       <i class="fas fa-trash"></i>
@@ -190,6 +198,31 @@
           <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
             <button type="button" id="btn-cancel-link" class="btn-toolbar">Hủy</button>
             <button type="submit" class="btn-toolbar" style="background:#2563eb; color:white;">Lưu liên kết</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="edit-link-modal" class="modal" style="display:none">
+      <div class="modal-content">
+        <h3>Sửa liên kết</h3>
+        <form id="edit-link-form" style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
+          <input type="hidden" id="edit-link-id" />
+          <div>
+            <label>URL File:</label>
+            <input type="url" id="edit-link-url" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" />
+          </div>
+          <div>
+            <label>Tên hiển thị:</label>
+            <input type="text" id="edit-link-name" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" />
+          </div>
+          <div>
+            <label>MimeType:</label>
+            <input type="text" id="edit-link-mime" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" />
+          </div>
+          <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+            <button type="button" id="btn-cancel-edit-link" class="btn-toolbar">Hủy</button>
+            <button type="submit" class="btn-toolbar" style="background:#2563eb; color:white;">Lưu</button>
           </div>
         </form>
       </div>

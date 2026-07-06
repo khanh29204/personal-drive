@@ -158,7 +158,7 @@ export const createLinkedFile = async (params: {
 export const updateFile = async (
   fileId: string,
   ownerId: string,
-  updates: { name?: string; isPublic?: boolean; folderId?: string | null },
+  updates: { name?: string; isPublic?: boolean; folderId?: string | null; url?: string; mimeType?: string },
 ): Promise<FileHydrated> => {
   const file = await getOwnedFile(fileId, ownerId);
 
@@ -167,7 +167,14 @@ export const updateFile = async (
       await assertFolderOwnership(updates.folderId, ownerId);
     }
   }
-  Object.assign(file, updates);
+  
+  const applyUpdates: Record<string, unknown> = { ...updates };
+  if (updates.url !== undefined) {
+    applyUpdates.externalUrl = updates.url;
+    delete applyUpdates.url;
+  }
+  
+  Object.assign(file, applyUpdates);
   await file.save();
   return file;
 };

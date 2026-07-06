@@ -123,38 +123,37 @@ echo "=========================================="
 echo "☁️ ĐANG UPLOAD TẬP TIN"
 echo "=========================================="
 
-while IFS= read -r file; do
-  # Bỏ qua script này nếu vô tình nằm trong thư mục đích
-  if [[ "$file" == *"$0"* ]]; then
-    continue
-  fi
+MAX_CONCURRENT_UPLOADS=5
 
-  rel_path="${file#./}"
+upload_file() {
+  local file="$1"
+  
+  local rel_path="${file#./}"
   rel_path="${rel_path#/}"
   
-  parent_dir="${rel_path%/*}"
-  file_name="${rel_path##*/}"
+  local parent_dir="${rel_path%/*}"
+  local file_name="${rel_path##*/}"
   
   if [ "$parent_dir" = "$rel_path" ]; then
     parent_dir="."
   fi
 
-  folder_id="${FOLDER_MAP[$parent_dir]}"
+  local folder_id="${FOLDER_MAP[$parent_dir]}"
   if [ -z "$folder_id" ]; then
     folder_id="null"
   fi
 
-  # Lấy thông tin file
+  local mime_type
   mime_type=$(file -b --mime-type "$file")
-  # Tùy hệ điều hành (Linux/Mac) thì wc hoặc stat khác nhau, dùng wc an toàn hơn
+  local size
   size=$(wc -c < "$file" | tr -d ' ')
 
-  # Chuẩn bị payload lấy URL (Dùng jq để tự động escape các ký tự đặc biệt trong tên file)
-  folder_payload="null"
+  local folder_payload="null"
   if [ "$folder_id" != "null" ]; then
     folder_payload="\"$folder_id\""
   fi
 
+  local payload
   payload=$(jq -n \
     --arg name "$file_name" \
     --arg mime "$mime_type" \
@@ -164,34 +163,53 @@ while IFS= read -r file; do
 
   echo "⏳ Đang xử lý: $rel_path ($size bytes) ..."
   
-  # Bước 1: Xin upload url
+  local res
   res=$(curl -s -X POST "$API_URL/api/files/upload-url" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "$payload")
 
+  local file_api_id
   file_api_id=$(echo "$res" | jq -r '.fileId // empty')
+  local upload_url
   upload_url=$(echo "$res" | jq -r '.uploadUrl // empty')
 
   if [ -z "$file_api_id" ] || [ -z "$upload_url" ]; then
-    echo "  ❌ Lỗi khi lấy Upload URL: $res"
-    continue
+    echo "  ❌ Lỗi khi lấy Upload URL cho $file_name: $res"
+    return 1
   fi
 
-  # Bước 2: Upload trực tiếp lên R2
+  local http_code
   http_code=$(curl -s -o /dev/null -w "%{http_code}" -X PUT -T "$file" \
     -H "Content-Type: $mime_type" "$upload_url")
   
   if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-    echo "  ❌ Lỗi khi upload lên R2 (HTTP $http_code)"
+    echo "  ❌ Lỗi khi upload $file_name lên R2 (HTTP $http_code)"
+    return 1
+  fi
+
+  local complete_res
+  complete_res=$(curl -s -X POST "$API_URL/api/files/$file_api_id/complete" \
+    -H "Authorization: Bearer $TOKEN")
+  echo "  ✅ Hoàn tất: $file_name"
+}
+
+while IFS= read -r file; do
+  # Bỏ qua script này nếu vô tình nằm trong thư mục đích
+  if [[ "$file" == *"$0"* ]]; then
     continue
   fi
 
-  # Bước 3: Xác nhận thành công
-  complete_res=$(curl -s -X POST "$API_URL/api/files/$file_api_id/complete" \
-    -H "Authorization: Bearer $TOKEN")
-  echo "  ✅ Hoàn tất!"
+  upload_file "$file" &
+
+  # Giới hạn số luồng chạy song song
+  while [ $(jobs -r -p | wc -l) -ge $MAX_CONCURRENT_UPLOADS ]; do
+    wait -n 2>/dev/null || true
+  done
 
 done < <(find "$TARGET_DIR" -type f | sort)
+
+# Chờ tất cả file còn lại tải lên xong
+wait
 
 echo "🎉 TOÀN BỘ QUÁ TRÌNH UPLOAD ĐÃ KẾT THÚC!"

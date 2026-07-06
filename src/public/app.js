@@ -348,6 +348,56 @@
     });
   }
 
+  // ── Edit Link ──────────────────────────────────────────────────
+  var editLinkModal = document.getElementById('edit-link-modal');
+  var editLinkForm = document.getElementById('edit-link-form');
+  var btnCancelEditLink = document.getElementById('btn-cancel-edit-link');
+
+  window.openEditLinkModal = function(id, name, url, mime) {
+    if (!editLinkModal) return;
+    document.getElementById('edit-link-id').value = id;
+    document.getElementById('edit-link-name').value = name;
+    document.getElementById('edit-link-url').value = url;
+    document.getElementById('edit-link-mime').value = mime;
+    editLinkModal.style.display = 'flex';
+  };
+
+  if (editLinkModal && editLinkForm) {
+    btnCancelEditLink.addEventListener('click', function() {
+      editLinkModal.style.display = 'none';
+    });
+
+    editLinkForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var btnSubmit = editLinkForm.querySelector('button[type="submit"]');
+      
+      var id = document.getElementById('edit-link-id').value;
+      var name = document.getElementById('edit-link-name').value.trim();
+      var url = document.getElementById('edit-link-url').value.trim();
+      var mimeType = document.getElementById('edit-link-mime').value.trim();
+
+      if (!name || !url || !mimeType) return;
+
+      try {
+        btnSubmit.disabled = true;
+        await apiCall('/api/files/' + id, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: name,
+            url: url,
+            mimeType: mimeType
+          })
+        });
+        showToast('Đã cập nhật liên kết thành công', 'success');
+        window.location.reload();
+      } catch (err) {
+        showToast(err.message, 'error');
+        btnSubmit.disabled = false;
+      }
+    });
+  }
+
   // ── Escape HTML helper ─────────────────────────────────────────
   function escapeHtml(str) {
     var div = document.createElement('div');

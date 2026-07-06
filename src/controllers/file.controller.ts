@@ -19,6 +19,8 @@ const updateBodySchema = z.object({
   name: z.string().trim().min(1).optional(),
   isPublic: z.boolean().optional(),
   folderId: z.string().nullable().optional(),
+  url: z.string().trim().url('Đường dẫn không hợp lệ').optional(),
+  mimeType: z.string().trim().min(1).optional(),
 });
 
 export const listFiles = async (req: Request, res: Response): Promise<void> => {

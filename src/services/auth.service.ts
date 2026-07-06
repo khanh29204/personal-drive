@@ -9,7 +9,7 @@ interface TokenPayload {
   id?: string;
   _id?: string;
   userId?: string;
-  userName: string;
+  user_name: string;
   iat: number;
 }
 
@@ -24,7 +24,7 @@ const verifyLocal = (token: string): AuthenticatedUser => {
     const decoded = verify(token, env.JWT_SECRET) as TokenPayload;
     const userId = decoded.id || decoded._id || decoded.userId;
     if (!userId) throw new Error('Invalid token format');
-    return { id: userId, userName: decoded.userName };
+    return { id: userId, userName: decoded.user_name };
   } catch {
     throw unauthorized();
   }
@@ -42,7 +42,7 @@ const verifyViaApi = async (token: string): Promise<AuthenticatedUser> => {
     });
     const userId = data.id || data._id || data.userId;
     if (!userId) throw new Error('Invalid token format');
-    return { id: userId, userName: data.userName };
+    return { id: userId, userName: data.user_name };
   } catch (error) {
     if (error instanceof AxiosError && error.response?.status === 401) {
       throw unauthorized();
