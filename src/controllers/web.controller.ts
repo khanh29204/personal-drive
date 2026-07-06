@@ -21,8 +21,16 @@ export interface DisplayItem {
 }
 
 export const renderHome = async (req: Request, res: Response): Promise<void> => {
-  const folderId = typeof req.query.folderId === 'string' ? req.query.folderId : null;
+  let folderId = typeof req.query.folderId === 'string' ? req.query.folderId : null;
+  const dirPath = typeof req.query.dir === 'string' ? req.query.dir : null;
   const viewerId = req.user?.id;
+
+  if (!folderId && dirPath) {
+    const resolvedId = await folderService.resolvePath(dirPath, viewerId);
+    if (resolvedId) {
+      folderId = resolvedId;
+    }
+  }
 
   const sortBy = (
     ['name', 'type', 'size', 'date'].includes(req.query.sortBy as string)
@@ -37,20 +45,25 @@ export const renderHome = async (req: Request, res: Response): Promise<void> => 
     fileService.listFiles({ folderId, viewerId }),
   ]);
 
-  const folderItems: DisplayItem[] = folders.map((folder) => ({
-    id: String(folder._id),
-    name: folder.name,
-    isDirectory: true,
-    icon: 'fa-folder',
-    sizeLabel: '-',
-    sizeRaw: -1,
-    mimeType: '',
-    modified: folder.updatedAt,
-    href: `/?folderId=${folder._id}`,
-    downloadHref: null,
-    isPublic: folder.isPublic,
-    isOwner: folder.ownerId === viewerId,
-  }));
+  const currentPath = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1].path : '';
+
+  const folderItems: DisplayItem[] = folders.map((folder) => {
+    const itemPath = currentPath ? `${currentPath}/${folder.name}` : folder.name;
+    return {
+      id: String(folder._id),
+      name: folder.name,
+      isDirectory: true,
+      icon: 'fa-folder',
+      sizeLabel: '-',
+      sizeRaw: -1,
+      mimeType: '',
+      modified: folder.updatedAt,
+      href: `/?dir=${encodeURIComponent(itemPath)}`,
+      downloadHref: null,
+      isPublic: folder.isPublic,
+      isOwner: folder.ownerId === viewerId,
+    };
+  });
 
   const fileItems: DisplayItem[] = files.map((file) => ({
     id: String(file._id),
@@ -99,7 +112,7 @@ export const renderHome = async (req: Request, res: Response): Promise<void> => 
 
   const parentHref =
     breadcrumb.length >= 2
-      ? `/?folderId=${breadcrumb[breadcrumb.length - 2].id}`
+      ? `/?dir=${encodeURIComponent(breadcrumb[breadcrumb.length - 2].path)}`
       : breadcrumb.length === 1
         ? '/'
         : null;
@@ -114,6 +127,7 @@ export const renderHome = async (req: Request, res: Response): Promise<void> => 
     sortBy,
     order,
     currentFolderId: folderId,
+    currentPath,
     allFolders,
   });
 };

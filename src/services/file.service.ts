@@ -1,6 +1,13 @@
+import { LRUCache } from 'lru-cache';
+
 import type { FileHydrated } from '../models/file.model';
 import { FileModel } from '../models/file.model';
 import { badRequest, forbidden, notFound } from '../utils/httpError';
+
+const fileCache = new LRUCache<string, FileHydrated>({
+  max: 500,
+  ttl: 1000 * 60 * 5, // 5 minutes
+});
 
 import { assertFolderOwnership } from './folder.service';
 import {
@@ -95,6 +102,7 @@ export const completeUpload = async (fileId: string, ownerId: string): Promise<F
   }
   await file.save();
 
+  fileCache.set(fileId, file);
   return file;
 };
 
@@ -103,13 +111,25 @@ export const getDownloadUrl = async (
   viewerId?: string,
   inline: boolean = false,
 ): Promise<string> => {
-  const file = await FileModel.findById(fileId);
+  let file: FileHydrated | null | undefined = fileCache.get(fileId);
+  if (!file) {
+    file = await FileModel.findById(fileId);
+    if (file) {
+      fileCache.set(fileId, file);
+    }
+  }
+
   if (!file || file.status !== 'completed') {
     throw notFound('Không tìm thấy file');
   }
   if (!file.isPublic && file.ownerId !== viewerId) {
     throw forbidden();
   }
+
+  // Cập nhật số lượt mở/tải file bất đồng bộ (không await) để giảm thời gian phản hồi
+  const updateQuery = inline ? { $inc: { views: 1 } } : { $inc: { downloads: 1 } };
+  FileModel.updateOne({ _id: fileId }, updateQuery).exec().catch(console.error);
+
   if (file.externalUrl) {
     return file.externalUrl;
   }
@@ -122,6 +142,7 @@ export const deleteFile = async (fileId: string, ownerId: string): Promise<void>
     await deleteObject(file.key);
   }
   await file.deleteOne();
+  fileCache.delete(fileId);
 };
 
 export const createLinkedFile = async (params: {
@@ -176,5 +197,6 @@ export const updateFile = async (
   
   Object.assign(file, applyUpdates);
   await file.save();
+  fileCache.set(fileId, file);
   return file;
 };

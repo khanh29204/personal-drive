@@ -18,7 +18,7 @@
           <a href="/"><i class="fas fa-home"></i> Home</a>
           <% breadcrumb.forEach((crumb) => { %>
           <span>/</span>
-          <a href="/?folderId=<%= crumb.id %>"><%= crumb.name %></a>
+          <a href="/?dir=<%= encodeURIComponent(crumb.path) %>"><%= crumb.name %></a>
           <% }) %>
         </div>
 
@@ -62,22 +62,22 @@
           <thead>
             <tr>
               <th style="width: 45%">
-                <a href="/?<%= currentFolderId ? 'folderId=' + currentFolderId + '&' : '' %>sortBy=name&order=<%= sortBy === 'name' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
+                <a href="/?<%= currentPath ? 'dir=' + encodeURIComponent(currentPath) + '&' : '' %>sortBy=name&order=<%= sortBy === 'name' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
                   Tên <% if (sortBy === 'name') { %><span class="sort-icon"><%= order === 'asc' ? '▲' : '▼' %></span><% } %>
                 </a>
               </th>
               <th style="width: 20%">
-                <a href="/?<%= currentFolderId ? 'folderId=' + currentFolderId + '&' : '' %>sortBy=type&order=<%= sortBy === 'type' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
+                <a href="/?<%= currentPath ? 'dir=' + encodeURIComponent(currentPath) + '&' : '' %>sortBy=type&order=<%= sortBy === 'type' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
                   Loại <% if (sortBy === 'type') { %><span class="sort-icon"><%= order === 'asc' ? '▲' : '▼' %></span><% } %>
                 </a>
               </th>
               <th class="hide-size-mobile">
-                <a href="/?<%= currentFolderId ? 'folderId=' + currentFolderId + '&' : '' %>sortBy=size&order=<%= sortBy === 'size' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
+                <a href="/?<%= currentPath ? 'dir=' + encodeURIComponent(currentPath) + '&' : '' %>sortBy=size&order=<%= sortBy === 'size' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
                   Kích thước <% if (sortBy === 'size') { %><span class="sort-icon"><%= order === 'asc' ? '▲' : '▼' %></span><% } %>
                 </a>
               </th>
               <th>
-                <a href="/?<%= currentFolderId ? 'folderId=' + currentFolderId + '&' : '' %>sortBy=date&order=<%= sortBy === 'date' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
+                <a href="/?<%= currentPath ? 'dir=' + encodeURIComponent(currentPath) + '&' : '' %>sortBy=date&order=<%= sortBy === 'date' && order === 'asc' ? 'desc' : 'asc' %>" class="sort-link">
                   Ngày sửa <% if (sortBy === 'date') { %><span class="sort-icon"><%= order === 'asc' ? '▲' : '▼' %></span><% } %>
                 </a>
               </th>

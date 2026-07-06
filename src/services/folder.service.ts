@@ -12,6 +12,33 @@ interface ListFoldersParams {
   viewerId?: string;
 }
 
+export const resolvePath = async (
+  path: string,
+  viewerId?: string,
+): Promise<string | null> => {
+  const parts = path.split('/').filter((p) => p.trim() !== '');
+  if (parts.length === 0) return null;
+
+  let currentParentId: string | null = null;
+  for (const part of parts) {
+    const visibility = viewerId
+      ? { $or: [{ isPublic: true }, { ownerId: viewerId }] }
+      : { isPublic: true };
+
+    const folderDoc: FolderHydrated | null = await FolderModel.findOne({
+      name: part,
+      parentId: currentParentId,
+      ...visibility,
+    });
+
+    if (!folderDoc) {
+      return null;
+    }
+    currentParentId = String(folderDoc._id);
+  }
+  return currentParentId;
+};
+
 /**
  * Danh sách folder nhìn thấy được: public luôn thấy, private chỉ chủ sở hữu thấy.
  */
@@ -94,6 +121,7 @@ export const deleteFolderRecursive = async (folderId: string, ownerId: string): 
 export interface BreadcrumbEntry {
   id: string;
   name: string;
+  path: string;
 }
 
 /**
@@ -119,9 +147,17 @@ export const getBreadcrumb = async (
 
   const chain: BreadcrumbEntry[] = [];
   while (current) {
-    chain.unshift({ id: String(current._id), name: current.name });
+    chain.unshift({ id: String(current._id), name: current.name, path: '' });
     current = current.parentId ? await FolderModel.findById(current.parentId) : null;
   }
+  
+  // Build paths
+  let currentPath = '';
+  for (const entry of chain) {
+    currentPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+    entry.path = currentPath;
+  }
+  
   return chain;
 };
 

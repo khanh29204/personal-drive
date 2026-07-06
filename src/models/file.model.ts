@@ -13,6 +13,8 @@ export interface FileDocument {
   ownerId: string;
   isPublic: boolean;
   status: FileStatus;
+  views: number;
+  downloads: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,6 +37,8 @@ const fileSchema = new Schema<FileDocument>(
       default: 'pending',
       index: true,
     },
+    views: { type: Number, default: 0 },
+    downloads: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
