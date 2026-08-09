@@ -8,9 +8,10 @@ const envSchema = z.object({
 
   MONGODB_URI: z.string().min(1, 'MONGODB_URI là bắt buộc'),
 
-  AUTH_STRATEGY: z.enum(['local', 'api']).default('local'),
-  JWT_SECRET: z.string().min(1, 'JWT_SECRET là bắt buộc'),
-  AUTH_API_BASE_URL: z.string().url('AUTH_API_BASE_URL phải là URL hợp lệ'),
+  AUTH_STRATEGY: z.enum(['local', 'api', 'grpc']).default('local'),
+  JWT_SECRET: z.string().optional(),
+  AUTH_API_BASE_URL: z.string().url('AUTH_API_BASE_URL phải là URL hợp lệ').optional(),
+  AUTH_GRPC_BASE_URL: z.string().default('localhost:50051'),
 
   COOKIE_NAME: z.string().default('drive_token'),
   COOKIE_DOMAIN: z.string().optional(),
@@ -28,7 +29,10 @@ const envSchema = z.object({
   R2_BUCKET_NAME: z.string().min(1, 'R2_BUCKET_NAME là bắt buộc'),
   R2_UPLOAD_URL_EXPIRES_IN: z.coerce.number().default(300),
   R2_DOWNLOAD_URL_EXPIRES_IN: z.coerce.number().default(3600),
-  R2_PUBLIC_DOMAIN: z.string().url('R2_PUBLIC_DOMAIN phải là URL hợp lệ, vd: https://cdn...').optional(),
+  R2_PUBLIC_DOMAIN: z
+    .string()
+    .url('R2_PUBLIC_DOMAIN phải là URL hợp lệ, vd: https://cdn...')
+    .optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

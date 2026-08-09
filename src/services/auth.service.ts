@@ -5,6 +5,8 @@ import { env } from '../config/env';
 import type { AuthenticatedUser } from '../types/express';
 import { unauthorized } from '../utils/httpError';
 
+import { verifyTokenGrpc } from './grpcAuth.client';
+
 interface TokenPayload {
   id?: string;
   _id?: string;
@@ -20,6 +22,10 @@ interface TokenPayload {
  * phía auth service (vd logout/khoá tài khoản) trước khi token hết hạn.
  */
 const verifyLocal = (token: string): AuthenticatedUser => {
+  if (!env.JWT_SECRET) {
+    throw new Error('JWT_SECRET không được thiết lập');
+  }
+
   try {
     const decoded = verify(token, env.JWT_SECRET) as TokenPayload;
     const userId = decoded.id || decoded._id || decoded.userId;
@@ -52,10 +58,27 @@ const verifyViaApi = async (token: string): Promise<AuthenticatedUser> => {
 };
 
 /**
+ * Verify token bằng cách gọi gRPC.
+ * Rất nhanh, và luôn đồng bộ với trạng thái token phía auth service.
+ */
+const verifyViaGrpc = async (token: string): Promise<AuthenticatedUser> => {
+  try {
+    const response = await verifyTokenGrpc(token);
+    if (!response.valid || !response.user_id) throw new Error('Invalid token');
+    return { id: response.user_id, userName: response.user_name };
+  } catch {
+    throw unauthorized();
+  }
+};
+
+/**
  * Điểm vào duy nhất để verify token, chọn chiến lược theo env AUTH_STRATEGY.
  * Muốn đổi chiến lược chỉ cần đổi biến môi trường, không cần sửa code nơi khác gọi.
  */
 export const verifyToken = (token: string): Promise<AuthenticatedUser> | AuthenticatedUser => {
+  if (env.AUTH_STRATEGY === 'grpc') {
+    return verifyViaGrpc(token);
+  }
   if (env.AUTH_STRATEGY === 'api') {
     return verifyViaApi(token);
   }
