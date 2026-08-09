@@ -86,6 +86,9 @@ pub async fn request_upload_url(
     if body.mime_type.trim().is_empty() {
         return Err(AppError::bad_request("mimeType không được để trống"));
     }
+    if body.size < 0 {
+        return Err(AppError::bad_request("size không hợp lệ"));
+    }
 
     let folder_oid = match body.folder_id {
         Some(s) if !s.trim().is_empty() => Some(

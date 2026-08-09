@@ -190,6 +190,9 @@ impl FileService {
             return Ok(file);
         }
 
+        // Lỗi ở đây (mạng, credential, 5xx của R2) trả về 500 và giữ nguyên
+        // trạng thái `pending` để client gọi lại. Chỉ khi R2 xác nhận object
+        // không tồn tại mới đánh dấu `failed`.
         let (exists, size_opt) = r2.get_object_meta(&file.key).await.map_err(AppError::Internal)?;
 
         let collection = db.collection::<File>("files");

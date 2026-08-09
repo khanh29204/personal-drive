@@ -26,7 +26,11 @@
       } catch (_e) {
         /* empty */
       }
-      throw new Error(data.message || 'Lỗi ' + res.status);
+      var err = new Error(data.message || 'Lỗi ' + res.status);
+      // Gắn status để chỗ gọi phân biệt được lỗi tạm thời (5xx) với lỗi do
+      // request sai (4xx) — dùng khi quyết định có thử lại hay không.
+      err.status = res.status;
+      throw err;
     }
     if (res.status === 204) return null;
     return res.json();
@@ -274,6 +278,22 @@
     }
   });
 
+  // Gọi /complete với backoff. Chỉ thử lại khi lỗi có thể là tạm thời (5xx,
+  // mất mạng); lỗi 4xx như "không tìm thấy file trên R2" thì thử lại vô nghĩa.
+  function completeUploadWithRetry(fileId, attemptsLeft) {
+    return apiCall('/api/files/' + fileId + '/complete', { method: 'POST' }).catch(function (err) {
+      var retryable = !err.status || err.status >= 500;
+      if (attemptsLeft <= 1 || !retryable) throw err;
+
+      var delayMs = (4 - attemptsLeft) * 1500;
+      return new Promise(function (resolve) {
+        setTimeout(resolve, delayMs);
+      }).then(function () {
+        return completeUploadWithRetry(fileId, attemptsLeft - 1);
+      });
+    });
+  }
+
   function startFileUpload(file, targetFolderId) {
     if (!widgetBodyEl) return;
     var taskId = 'up_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
@@ -304,9 +324,13 @@
     var fillEl = document.getElementById('fill_' + taskId);
 
     var xhr = null;
+    // Hủy có thể xảy ra trong lúc còn đang chờ /api/files/upload-url, khi đó
+    // xhr vẫn null nên phải nhớ trạng thái để không gửi file sau đó.
+    var cancelled = false;
 
     if (cancelBtn) {
       cancelBtn.addEventListener('click', function () {
+        cancelled = true;
         if (xhr) {
           xhr.abort();
         }
@@ -336,6 +360,11 @@
     })
       .then(function (data) {
         return new Promise(function (resolve, reject) {
+          if (cancelled) {
+            reject(new Error('Đã hủy tải lên'));
+            return;
+          }
+
           xhr = new XMLHttpRequest();
           var now = Date.now();
 
@@ -395,7 +424,11 @@
         });
       })
       .then(function (fileId) {
-        return apiCall('/api/files/' + fileId + '/complete', { method: 'POST' });
+        // File đã nằm trên R2 nhưng chưa được đánh dấu completed. Nếu bước này
+        // thất bại vì lỗi tạm thời, file kẹt ở pending và sẽ bị job dọn rác xóa
+        // sau 24h, nên thử lại vài lần trước khi báo lỗi.
+        if (speedEl) speedEl.textContent = 'Đang hoàn tất...';
+        return completeUploadWithRetry(fileId, 3);
       })
       .then(function () {
         delete activeUploadTasks[taskId];
