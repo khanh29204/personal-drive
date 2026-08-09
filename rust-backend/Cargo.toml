@@ -1,0 +1,48 @@
+[package]
+name = "rust-backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.10", features = ["cookie"] }
+async-trait = "0.1"
+tokio = { version = "1.44", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+mongodb = "3.8"
+bson = { version = "2.15", features = ["chrono-0_4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+aws-config = "1.10"
+aws-sdk-s3 = "1.141"
+aws-credential-types = "1.3"
+jsonwebtoken = "9.3"
+reqwest = { version = "0.12", features = ["json", "cookies"] }
+tonic = "0.12"
+prost = "0.13"
+minijinja = { version = "2.23", features = ["loader", "json"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.18", features = ["v4"] }
+url = "2.5"
+urlencoding = "2.1"
+time = "0.3"
+futures = "0.3"
+moka = { version = "0.12", features = ["future"] }
+mime_guess = "2.0"
+
+[build-dependencies]
+tonic-build = { version = "0.12", features = ["transport"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json", "cookies"] }
+
+[profile.release]
+opt-level = 3
+codegen-units = 16
+lto = "thin"
+panic = "abort"
+strip = true

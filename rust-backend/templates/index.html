@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ current_title }}</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"
+    />
+  </head>
+
+  <body>
+    <div class="container">
+      <header>
+        <div class="breadcrumb">
+          <a href="/"><i class="fas fa-home"></i> Home</a>
+          {% for crumb in breadcrumb %}
+          <span>/</span>
+          <a href="/?dir={{ crumb.path | urlencode }}">{{ crumb.name }}</a>
+          {% endfor %}
+        </div>
+
+        <div class="auth-box">
+          {% if user %}
+          <span>Xin chào, <strong>{{ user.userName }}</strong></span>
+          <button id="logout-btn" class="btn-icon" type="button">Đăng xuất</button>
+          {% else %}
+          <div id="login-form-container" style="display:none; align-items: center; gap: 8px;">
+            <form id="login-form">
+              <input type="text" name="userName" placeholder="Tên đăng nhập" required />
+              <input type="password" name="password" placeholder="Mật khẩu" required />
+              <button type="submit">Vào</button>
+            </form>
+            <span id="login-error" class="login-error"></span>
+          </div>
+          {% endif %}
+        </div>
+
+        <h1 id="page-title" ondblclick="document.getElementById('login-form-container') && (document.getElementById('login-form-container').style.display='flex')">{{ current_title }}</h1>
+      </header>
+
+      {% if user %}
+      <div class="toolbar">
+        <button id="btn-new-folder" class="btn-toolbar" type="button">
+          <i class="fas fa-folder-plus"></i> Thư mục mới
+        </button>
+        <button id="btn-upload" class="btn-toolbar" type="button">
+          <i class="fas fa-cloud-upload-alt"></i> Tải file lên
+        </button>
+        <button id="btn-link-file" class="btn-toolbar" type="button">
+          <i class="fas fa-link"></i> Liên kết file
+        </button>
+        <input type="file" id="file-input" multiple hidden />
+      </div>
+      <div id="upload-progress-area"></div>
+      {% endif %}
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 45%">
+                <a href="/?{% if currentPath %}dir={{ currentPath | urlencode }}&{% endif %}sortBy=name&order={% if sortBy == 'name' and order == 'asc' %}desc{% else %}asc{% endif %}" class="sort-link">
+                  Tên {% if sortBy == 'name' %}<span class="sort-icon">{% if order == 'asc' %}▲{% else %}▼{% endif %}</span>{% endif %}
+                </a>
+              </th>
+              <th style="width: 20%">
+                <a href="/?{% if currentPath %}dir={{ currentPath | urlencode }}&{% endif %}sortBy=type&order={% if sortBy == 'type' and order == 'asc' %}desc{% else %}asc{% endif %}" class="sort-link">
+                  Loại {% if sortBy == 'type' %}<span class="sort-icon">{% if order == 'asc' %}▲{% else %}▼{% endif %}</span>{% endif %}
+                </a>
+              </th>
+              <th class="hide-size-mobile">
+                <a href="/?{% if currentPath %}dir={{ currentPath | urlencode }}&{% endif %}sortBy=size&order={% if sortBy == 'size' and order == 'asc' %}desc{% else %}asc{% endif %}" class="sort-link">
+                  Kích thước {% if sortBy == 'size' %}<span class="sort-icon">{% if order == 'asc' %}▲{% else %}▼{% endif %}</span>{% endif %}
+                </a>
+              </th>
+              <th>
+                <a href="/?{% if currentPath %}dir={{ currentPath | urlencode }}&{% endif %}sortBy=date&order={% if sortBy == 'date' and order == 'asc' %}desc{% else %}asc{% endif %}" class="sort-link">
+                  Ngày sửa {% if sortBy == 'date' %}<span class="sort-icon">{% if order == 'asc' %}▲{% else %}▼{% endif %}</span>{% endif %}
+                </a>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if parentHref %}
+            <tr>
+              <td colspan="4">
+                <div class="file-name">
+                  <i class="fas fa-level-up-alt text-secondary"></i>
+                  <a href="{{ parentHref }}" class="item-link">... (Quay lại)</a>
+                </div>
+              </td>
+            </tr>
+            {% endif %}
+
+            {% if items | length == 0 %}
+            <tr>
+              <td colspan="4" style="text-align: center; padding: 40px">
+                <span class="text-muted">Thư mục trống</span>
+              </td>
+            </tr>
+            {% endif %}
+
+            {% for item in items %}
+            <tr>
+              <td>
+                <div class="file-name">
+                  <i class="fas {{ item.icon }}"></i>
+                  <div class="file-info-group">
+                    <a href="{{ item.href }}" class="item-link" {% if not item.isDirectory %}target="_blank"{% endif %}>
+                      {{ item.name }}
+                    </a>
+                    <div class="mobile-size">{{ item.sizeLabel }}</div>
+                  </div>
+
+                  {% if not item.isDirectory %}
+                  <div class="btn-download-wrapper">
+                    <a href="{{ item.downloadHref }}" class="btn-icon" title="Tải về máy">
+                      <i class="fas fa-download"></i>
+                    </a>
+                  </div>
+                  {% endif %}
+
+                  {% if item.isOwner %}
+                  <div class="row-actions">
+                    <button class="btn-icon" title="{% if item.isPublic %}Chuyển sang riêng tư{% else %}Chuyển sang công khai{% endif %}"
+                      onclick="togglePublic('{{ item.id }}', {{ item.isDirectory | tojson }}, {{ item.isPublic | tojson }})">
+                      <i class="fas {% if item.isPublic %}fa-lock-open{% else %}fa-lock{% endif %}"></i>
+                    </button>
+                    <button class="btn-icon" title="Di chuyển"
+                      onclick="openMoveModal('{{ item.id }}', {{ item.isDirectory | tojson }}, `{{ item.name }}`)">
+                      <i class="fas fa-arrows-alt"></i>
+                    </button>
+                    {% if item.externalUrl %}
+                    <button class="btn-icon" title="Sửa liên kết"
+                      onclick="openEditLinkModal('{{ item.id }}', `{{ item.name }}`, `{{ item.externalUrl }}`, `{{ item.mimeType }}`)">
+                      <i class="fas fa-edit"></i>
+                    </button>
+                    {% endif %}
+                    <button class="btn-icon btn-danger" title="Xoá"
+                      onclick="deleteItem('{{ item.id }}', '{% if item.isDirectory %}folder{% else %}file{% endif %}', `{{ item.name }}`)">
+                      <i class="fas fa-trash"></i>
+                    </button>
+                  </div>
+                  {% endif %}
+                </div>
+              </td>
+              <td class="text-sm" style="color: #4b5563">
+                {% if item.isDirectory %}Thư mục{% else %}Tệp{% endif %}
+              </td>
+              <td class="text-sm hide-size-mobile">{{ item.sizeLabel }}</td>
+              <td class="text-sm">
+                {{ item.modified_date }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" style="display:none"></div>
+
+    <div id="move-modal" class="modal" style="display:none">
+      <div class="modal-content">
+        <h3>Di chuyển "<span id="move-item-name"></span>"</h3>
+        <div style="margin: 16px 0;">
+          <label>Chọn thư mục đích:</label>
+          <select id="move-folder-select" style="width:100%; padding: 8px; margin-top: 8px; border-radius: 4px; border: 1px solid #d1d5db;">
+            <option value="">-- Màn hình chính --</option>
+          </select>
+        </div>
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+          <button id="btn-cancel-move" class="btn-toolbar">Hủy</button>
+          <button id="btn-confirm-move" class="btn-toolbar" style="background:#2563eb; color:white;">Di chuyển</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="link-file-modal" class="modal" style="display:none">
+      <div class="modal-content">
+        <h3>Liên kết file bên ngoài</h3>
+        <form id="link-file-form" style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
+          <div>
+            <label>URL File:</label>
+            <input type="url" id="link-url" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" placeholder="https://..." />
+          </div>
+          <div>
+            <label>Tên hiển thị:</label>
+            <input type="text" id="link-name" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" placeholder="Tên file" />
+          </div>
+          <div>
+            <label>MimeType:</label>
+            <input type="text" id="link-mime" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" placeholder="video/mp4, image/jpeg, ..." />
+          </div>
+          <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+            <button type="button" id="btn-cancel-link" class="btn-toolbar">Hủy</button>
+            <button type="submit" class="btn-toolbar" style="background:#2563eb; color:white;">Lưu liên kết</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="edit-link-modal" class="modal" style="display:none">
+      <div class="modal-content">
+        <h3>Sửa liên kết</h3>
+        <form id="edit-link-form" style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
+          <input type="hidden" id="edit-link-id" />
+          <div>
+            <label>URL File:</label>
+            <input type="url" id="edit-link-url" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" />
+          </div>
+          <div>
+            <label>Tên hiển thị:</label>
+            <input type="text" id="edit-link-name" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" />
+          </div>
+          <div>
+            <label>MimeType:</label>
+            <input type="text" id="edit-link-mime" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" />
+          </div>
+          <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+            <button type="button" id="btn-cancel-edit-link" class="btn-toolbar">Hủy</button>
+            <button type="submit" class="btn-toolbar" style="background:#2563eb; color:white;">Lưu</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script>
+      window.__DRIVE_CONFIG__ = {
+        currentFolderId: {{ currentFolderId_json | safe }},
+        user: {{ user_json | safe }},
+        allFolders: {{ allFolders_json | safe }},
+      };
+    </script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

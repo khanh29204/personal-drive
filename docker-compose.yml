@@ -1,13 +1,13 @@
 version: '3.8'
 
 services:
-  app:
+  app-rust:
     build:
-      context: .
+      context: ./rust-backend
       dockerfile: Dockerfile
-    container_name: personal-drive-backend
+    container_name: personal-drive-backend-rust
     restart: unless-stopped
     ports:
-      - "4000:4000"
+      - "4001:4000"
     env_file:
       - .env
