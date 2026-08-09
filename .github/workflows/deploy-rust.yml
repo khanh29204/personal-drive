@@ -37,27 +37,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cache cargo cache-mount dirs
-        uses: actions/cache@v4
-        id: cargo-cache
-        with:
-          path: |
-            var-cache-cargo-registry
-            var-cache-cargo-target
-          key: cargo-${{ hashFiles('rust-backend/Cargo.lock') }}
-          restore-keys: |
-            cargo-
-
-      - name: Inject cache mounts into build
-        uses: reproducible-containers/buildkit-cache-dance@v3
-        with:
-          cache-map: |
-            {
-              "var-cache-cargo-registry": "/usr/local/cargo/registry",
-              "var-cache-cargo-target": "/app/target"
-            }
-          skip-extraction: ${{ steps.cargo-cache.outputs.cache-hit }}
-
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
@@ -76,8 +55,8 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=rust-backend
+          cache-to: type=gha,mode=max,scope=rust-backend
 
   deploy:
     needs: build
@@ -96,4 +75,3 @@ jobs:
             docker compose pull
             docker compose up -d
             docker image prune -f
-
