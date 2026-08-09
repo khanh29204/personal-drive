@@ -2,6 +2,7 @@ use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::{Region, SharedCredentialsProvider};
 use aws_sdk_s3::presigning::PresigningConfig;
+use aws_sdk_s3::types::{CorsConfiguration, CorsRule};
 use aws_sdk_s3::Client as S3Client;
 use std::time::Duration;
 use uuid::Uuid;
@@ -55,12 +56,56 @@ impl R2Service {
 
         let client = S3Client::from_conf(s3_config);
 
-        Self {
+        let service = Self {
             client,
             bucket_name: config.r2_bucket_name.clone(),
             upload_expires_in: config.r2_upload_url_expires_in,
             download_expires_in: config.r2_download_url_expires_in,
             public_domain: config.r2_public_domain.clone(),
+        };
+
+        service.configure_bucket_cors().await;
+
+        service
+    }
+
+    pub async fn configure_bucket_cors(&self) {
+        let cors_rule = match CorsRule::builder()
+            .allowed_origins("*")
+            .allowed_methods("GET")
+            .allowed_methods("PUT")
+            .allowed_methods("POST")
+            .allowed_methods("DELETE")
+            .allowed_methods("HEAD")
+            .allowed_headers("*")
+            .max_age_seconds(3600)
+            .build()
+        {
+            Ok(rule) => rule,
+            Err(e) => {
+                eprintln!("⚠️ Cảnh báo tạo CorsRule: {}", e);
+                return;
+            }
+        };
+
+        let cors_config = match CorsConfiguration::builder().cors_rules(cors_rule).build() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                eprintln!("⚠️ Cảnh báo tạo CorsConfiguration: {}", e);
+                return;
+            }
+        };
+
+        match self
+            .client
+            .put_bucket_cors()
+            .bucket(&self.bucket_name)
+            .cors_configuration(cors_config)
+            .send()
+            .await
+        {
+            Ok(_) => println!("✅ Đã tự động cấu hình R2 Bucket CORS cho '{}'", self.bucket_name),
+            Err(e) => eprintln!("⚠️ Cảnh báo gửi put_bucket_cors tới R2: {}", e),
         }
     }
 
