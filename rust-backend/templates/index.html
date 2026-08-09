@@ -288,6 +288,16 @@
             <i class="fas fa-magic"></i> Xoá tất cả
           </button>
         </div>
+    <!-- Global Floating Upload Manager Widget -->
+    <div id="global-upload-manager" class="upload-manager-widget" style="display:none">
+      <div id="upload-manager-header" class="upload-manager-header">
+        <span id="upload-manager-title"><i class="fas fa-cloud-upload-alt"></i> Đang tải lên (<span id="upload-completed-count">0</span>/<span id="upload-total-count">0</span>)</span>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span id="upload-global-speed" style="font-size: 11px; color: #94a3b8; font-weight: normal;">0 B/s</span>
+          <button id="btn-toggle-upload-widget" class="btn-icon-sm" type="button" title="Thu nhỏ / Mở rộng"><i class="fas fa-chevron-down"></i></button>
+        </div>
+      </div>
+      <div id="upload-manager-body" class="upload-manager-body">
       </div>
     </div>
 

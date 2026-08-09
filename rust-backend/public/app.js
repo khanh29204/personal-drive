@@ -120,7 +120,319 @@
     });
   }
 
-  // ── Upload Files ───────────────────────────────────────────────
+  // ── Global Upload Manager ──────────────────────────────────────
+  var activeUploadTasks = {};
+  var completedUploadCount = 0;
+  var totalUploadCount = 0;
+
+  var widgetEl = document.getElementById('global-upload-manager');
+  var widgetHeaderEl = document.getElementById('upload-manager-header');
+  var widgetBodyEl = document.getElementById('upload-manager-body');
+  var widgetToggleBtn = document.getElementById('btn-toggle-upload-widget');
+  var completedCountEl = document.getElementById('upload-completed-count');
+  var totalCountEl = document.getElementById('upload-total-count');
+  var globalSpeedEl = document.getElementById('upload-global-speed');
+
+  if (widgetToggleBtn && widgetBodyEl) {
+    widgetToggleBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      toggleUploadWidget();
+    });
+    if (widgetHeaderEl) {
+      widgetHeaderEl.addEventListener('click', function () {
+        toggleUploadWidget();
+      });
+    }
+  }
+
+  function toggleUploadWidget() {
+    if (!widgetBodyEl || !widgetToggleBtn) return;
+    var isMin = widgetBodyEl.classList.toggle('minimized');
+    widgetToggleBtn.innerHTML = isMin ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
+  }
+
+  function updateGlobalUploadSummary() {
+    if (completedCountEl) completedCountEl.textContent = completedUploadCount;
+    if (totalCountEl) totalCountEl.textContent = totalUploadCount;
+
+    var activeTaskKeys = Object.keys(activeUploadTasks);
+    var totalSpeed = 0;
+    activeTaskKeys.forEach(function (k) {
+      if (activeUploadTasks[k] && activeUploadTasks[k].speed) {
+        totalSpeed += activeUploadTasks[k].speed;
+      }
+    });
+
+    if (globalSpeedEl) {
+      if (activeTaskKeys.length > 0) {
+        globalSpeedEl.textContent = formatBytes(totalSpeed) + '/s';
+      } else {
+        globalSpeedEl.textContent = '';
+      }
+    }
+
+    if (totalUploadCount > 0 && widgetEl) {
+      widgetEl.style.display = 'block';
+    }
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return '0 B';
+    var k = 1024;
+    var sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  // Warning when leaving page during upload
+  window.addEventListener('beforeunload', function (e) {
+    if (Object.keys(activeUploadTasks).length > 0) {
+      var msg = 'Đang có file đang được tải lên. Bạn có chắc chắn muốn rời khỏi trang?';
+      e.preventDefault();
+      e.returnValue = msg;
+      return msg;
+    }
+  });
+
+  // Soft SPA Navigation for Folders
+  function softNavigateTo(url) {
+    fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+      .then(function (res) { return res.text(); })
+      .then(function (html) {
+        var parser = new DOMParser();
+        var doc = parser.parseFromString(html, 'text/html');
+
+        var newTableWrapper = doc.querySelector('.table-wrapper');
+        var oldTableWrapper = document.querySelector('.table-wrapper');
+        if (newTableWrapper && oldTableWrapper) {
+          oldTableWrapper.parentNode.replaceChild(newTableWrapper, oldTableWrapper);
+        }
+
+        var newBreadcrumb = doc.querySelector('.breadcrumb');
+        var oldBreadcrumb = document.querySelector('.breadcrumb');
+        if (newBreadcrumb && oldBreadcrumb) {
+          oldBreadcrumb.parentNode.replaceChild(newBreadcrumb, oldBreadcrumb);
+        }
+
+        var newTitle = doc.querySelector('#page-title');
+        var oldTitle = document.querySelector('#page-title');
+        if (newTitle && oldTitle) {
+          oldTitle.textContent = newTitle.textContent;
+        }
+
+        var newConfigScript = doc.querySelector('#drive-config');
+        if (newConfigScript) {
+          try {
+            window.__DRIVE_CONFIG__ = JSON.parse(newConfigScript.textContent || '{}');
+            currentFolderId = window.__DRIVE_CONFIG__.currentFolderId;
+          } catch (_e) {}
+        }
+
+        // Re-bind filter pill events if needed
+        var newFilterPills = document.querySelectorAll('.filter-pill');
+        if (newFilterPills.length > 0) {
+          newFilterPills.forEach(function (pill) {
+            pill.addEventListener('click', function () {
+              newFilterPills.forEach(function (p) { p.classList.remove('active'); });
+              pill.classList.add('active');
+
+              var selectedCat = pill.getAttribute('data-category');
+              var rows = document.querySelectorAll('.file-item-row');
+
+              rows.forEach(function (row) {
+                var rowCat = row.getAttribute('data-category');
+                if (selectedCat === 'all' || rowCat === selectedCat) {
+                  row.style.display = '';
+                } else {
+                  row.style.display = 'none';
+                }
+              });
+
+              var parentRow = document.querySelector('.parent-row');
+              if (parentRow) parentRow.style.display = '';
+            });
+          });
+        }
+
+        window.history.pushState({}, '', url);
+      })
+      .catch(function () {
+        window.location.href = url;
+      });
+  }
+
+  // Intercept folder link clicks for soft navigation
+  document.addEventListener('click', function (e) {
+    var link = e.target.closest('a');
+    if (!link) return;
+    var href = link.getAttribute('href');
+    if (href && (href.startsWith('/?dir=') || href === '/')) {
+      if (!e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        e.preventDefault();
+        softNavigateTo(href);
+      }
+    }
+  });
+
+  function startFileUpload(file, targetFolderId) {
+    if (!widgetBodyEl) return;
+    var taskId = 'up_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+    totalUploadCount++;
+    updateGlobalUploadSummary();
+
+    var cardEl = document.createElement('div');
+    cardEl.className = 'upload-item-card';
+    cardEl.id = 'card_' + taskId;
+    cardEl.innerHTML =
+      '<div class="upload-item-header">' +
+      '  <span class="upload-item-name" title="' + escapeHtml(file.name) + '"><i class="fas fa-file"></i> ' + escapeHtml(file.name) + '</span>' +
+      '  <button class="btn-cancel-item" type="button" id="cancel_' + taskId + '"><i class="fas fa-times"></i> Hủy</button>' +
+      '</div>' +
+      '<div class="upload-item-meta">' +
+      '  <span id="speed_' + taskId + '">Đang chuẩn bị...</span>' +
+      '  <span id="pct_' + taskId + '">0%</span>' +
+      '</div>' +
+      '<div class="upload-item-progress-bar">' +
+      '  <div class="upload-item-progress-fill" id="fill_' + taskId + '"></div>' +
+      '</div>';
+
+    widgetBodyEl.appendChild(cardEl);
+
+    var cancelBtn = document.getElementById('cancel_' + taskId);
+    var speedEl = document.getElementById('speed_' + taskId);
+    var pctEl = document.getElementById('pct_' + taskId);
+    var fillEl = document.getElementById('fill_' + taskId);
+
+    var xhr = null;
+
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', function () {
+        if (xhr) {
+          xhr.abort();
+        }
+        delete activeUploadTasks[taskId];
+        if (speedEl) {
+          speedEl.textContent = 'Đã hủy';
+          speedEl.style.color = '#ef4444';
+        }
+        if (fillEl) fillEl.style.background = '#ef4444';
+        cancelBtn.style.display = 'none';
+        showToast('Đã hủy tải lên ' + file.name, 'info');
+        updateGlobalUploadSummary();
+      });
+    }
+
+    // Step 1: Request upload URL
+    apiCall('/api/files/upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        size: file.size,
+        folderId: targetFolderId || null,
+        isPublic: false,
+      }),
+    })
+      .then(function (data) {
+        return new Promise(function (resolve, reject) {
+          xhr = new XMLHttpRequest();
+          var now = Date.now();
+
+          activeUploadTasks[taskId] = {
+            xhr: xhr,
+            file: file,
+            startTime: now,
+            lastTime: now,
+            lastLoaded: 0,
+            speed: 0,
+          };
+
+          xhr.open('PUT', data.uploadUrl, true);
+          xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+
+          xhr.upload.addEventListener('progress', function (e) {
+            if (e.lengthComputable && activeUploadTasks[taskId]) {
+              var currTime = Date.now();
+              var task = activeUploadTasks[taskId];
+              var timeDiff = (currTime - task.lastTime) / 1000;
+
+              if (timeDiff >= 0.3) {
+                var bytesDiff = e.loaded - task.lastLoaded;
+                task.speed = bytesDiff / timeDiff;
+                task.lastLoaded = e.loaded;
+                task.lastTime = currTime;
+              }
+
+              var pct = Math.round((e.loaded / e.total) * 100);
+              if (fillEl) fillEl.style.width = pct + '%';
+              if (pctEl) pctEl.textContent = pct + '%';
+              if (speedEl) {
+                speedEl.textContent = formatBytes(task.speed) + '/s • ' + formatBytes(e.loaded) + ' / ' + formatBytes(e.total);
+              }
+
+              updateGlobalUploadSummary();
+            }
+          });
+
+          xhr.onload = function () {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(data.fileId);
+            } else {
+              reject(new Error('Upload thất bại (HTTP ' + xhr.status + ')'));
+            }
+          };
+
+          xhr.onerror = function () {
+            reject(new Error('Lỗi kết nối mạng khi tải file'));
+          };
+
+          xhr.onabort = function () {
+            reject(new Error('Đã hủy tải lên'));
+          };
+
+          xhr.send(file);
+        });
+      })
+      .then(function (fileId) {
+        return apiCall('/api/files/' + fileId + '/complete', { method: 'POST' });
+      })
+      .then(function () {
+        delete activeUploadTasks[taskId];
+        completedUploadCount++;
+        if (fillEl) {
+          fillEl.style.width = '100%';
+          fillEl.style.background = '#22c55e';
+        }
+        if (speedEl) {
+          speedEl.textContent = 'Hoàn tất • ' + formatBytes(file.size);
+          speedEl.style.color = '#22c55e';
+        }
+        if (cancelBtn) cancelBtn.style.display = 'none';
+
+        updateGlobalUploadSummary();
+        showToast('Đã tải lên ' + file.name, 'success');
+
+        // Soft refresh current view
+        softNavigateTo(window.location.pathname + window.location.search);
+        loadStorageQuota();
+      })
+      .catch(function (err) {
+        delete activeUploadTasks[taskId];
+        if (err.message !== 'Đã hủy tải lên') {
+          if (speedEl) {
+            speedEl.textContent = err.message || 'Thất bại';
+            speedEl.style.color = '#ef4444';
+          }
+          if (fillEl) fillEl.style.background = '#ef4444';
+          if (cancelBtn) cancelBtn.style.display = 'none';
+          showToast(err.message || 'Upload thất bại', 'error');
+        }
+        updateGlobalUploadSummary();
+      });
+  }
+
+  // ── Upload Files Event ─────────────────────────────────────────
   var btnUpload = document.getElementById('btn-upload');
   var fileInput = document.getElementById('file-input');
   if (btnUpload && fileInput) {
@@ -128,110 +440,14 @@
       fileInput.click();
     });
 
-    fileInput.addEventListener('change', async function () {
+    fileInput.addEventListener('change', function () {
       var files = fileInput.files;
       if (!files || files.length === 0) return;
 
-      var progressArea = document.getElementById('upload-progress-area');
-      var allDone = 0;
-      var totalFiles = files.length;
-      var hasError = false;
-
+      var targetFolderId = currentFolderId || null;
       for (var i = 0; i < files.length; i++) {
-        (function (file, index) {
-          // Create progress bar for this file
-          var progressEl = document.createElement('div');
-          progressEl.className = 'upload-progress';
-          progressEl.innerHTML =
-            '<span class="upload-filename">' +
-            escapeHtml(file.name) +
-            '</span>' +
-            '<div class="upload-bar"><div class="upload-bar-fill" id="bar-' +
-            index +
-            '"></div></div>' +
-            '<span class="upload-percent" id="percent-' +
-            index +
-            '">0%</span>';
-          progressArea.appendChild(progressEl);
-
-          // Step 1: Get upload URL
-          apiCall('/api/files/upload-url', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: file.name,
-              mimeType: file.type || 'application/octet-stream',
-              size: file.size,
-              folderId: currentFolderId || null,
-              isPublic: false,
-            }),
-          })
-            .then(function (data) {
-              // Step 2: Upload to R2 via XHR for progress
-              return new Promise(function (resolve, reject) {
-                var xhr = new XMLHttpRequest();
-                xhr.open('PUT', data.uploadUrl, true);
-                xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-
-                xhr.upload.addEventListener('progress', function (e) {
-                  if (e.lengthComputable) {
-                    var pct = Math.round((e.loaded / e.total) * 100);
-                    var barFill = document.getElementById('bar-' + index);
-                    var percentEl = document.getElementById('percent-' + index);
-                    if (barFill) barFill.style.width = pct + '%';
-                    if (percentEl) percentEl.textContent = pct + '%';
-                  }
-                });
-
-                xhr.onload = function () {
-                  if (xhr.status >= 200 && xhr.status < 300) {
-                    resolve(data.fileId);
-                  } else {
-                    reject(new Error('Upload lên R2 thất bại (status ' + xhr.status + ')'));
-                  }
-                };
-                xhr.onerror = function () {
-                  reject(new Error('Lỗi mạng khi upload'));
-                };
-                xhr.send(file);
-              });
-            })
-            .then(function (fileId) {
-              // Step 3: Complete upload
-              return apiCall('/api/files/' + fileId + '/complete', {
-                method: 'POST',
-              });
-            })
-            .then(function () {
-              var barFill = document.getElementById('bar-' + index);
-              if (barFill) {
-                barFill.style.width = '100%';
-                barFill.style.background = '#22c55e';
-              }
-              allDone++;
-              if (allDone === totalFiles) {
-                showToast('Tải lên hoàn tất!', 'success');
-                setTimeout(function () {
-                  window.location.reload();
-                }, 1000);
-              }
-            })
-            .catch(function (err) {
-              hasError = true;
-              var barFill = document.getElementById('bar-' + index);
-              if (barFill) barFill.style.background = '#ef4444';
-              showToast(file.name + ': ' + err.message, 'error');
-              allDone++;
-              if (allDone === totalFiles && !hasError) {
-                setTimeout(function () {
-                  window.location.reload();
-                }, 1000);
-              }
-            });
-        })(files[i], i);
+        startFileUpload(files[i], targetFolderId);
       }
-
-      // Reset file input so the same files can be selected again
       fileInput.value = '';
     });
   }
