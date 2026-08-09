@@ -1,14 +1,15 @@
 name: Rust CI/CD Deployment
 
 on:
-  push:
-    branches: [main]
+  # Chỉ chạy khi được kích hoạt thủ công. Trước đây workflow này chạy trên mọi
+  # push vào main (kể cả khi chỉ sửa rust-backend) và push cùng tag :latest như
+  # deploy-rust.yml, nên hai workflow ghi đè image của nhau.
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  # Convert repository name to lowercase automatically using shell (if needed), 
-  # but IMAGE_NAME needs to be lowercase. github.repository is usually lowercase.
-  IMAGE_NAME: ${{ github.repository }}
+  # Tag riêng cho bản Node để không đụng vào image của bản Rust
+  IMAGE_NAME: ${{ github.repository }}-node
 
 jobs:
   build-and-push:

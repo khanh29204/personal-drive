@@ -15,7 +15,9 @@ env:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Không hủy run đang chạy: run bị hủy giữa chừng sẽ không kịp export cache,
+  # làm mất toàn bộ cache của lần build đó
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -55,8 +57,8 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=rust-backend
-          cache-to: type=gha,mode=max,scope=rust-backend
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-rust
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-rust,mode=max
 
   deploy:
     needs: build

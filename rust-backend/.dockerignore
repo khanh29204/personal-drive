@@ -1,0 +1,16 @@
+# Thư mục build cục bộ (hiện ~10GB) — không được lọt vào build context
+target/
+
+# Secrets: .env ở đây là symlink trỏ ra ngoài context
+.env
+.env.*
+
+# Không cần cho việc biên dịch binary
+tests/
+*.log
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+docker-compose.yml
+README.md
