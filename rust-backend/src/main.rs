@@ -20,6 +20,10 @@ use db::init_db;
 use routes::create_router;
 use services::r2_service::R2Service;
 
+fn urlencode_filter(value: String) -> String {
+    urlencoding::encode(&value).into_owned()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
@@ -41,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut jinja = minijinja::Environment::new();
     jinja.set_loader(minijinja::path_loader("templates"));
     jinja.add_filter("tojson", minijinja::filters::tojson);
+    jinja.add_filter("urlencode", urlencode_filter);
 
     let jinja_arc = Arc::new(jinja);
 

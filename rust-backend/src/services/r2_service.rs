@@ -147,4 +147,35 @@ impl R2Service {
             .map_err(|e| format!("Delete object error: {e}"))?;
         Ok(())
     }
+
+    pub async fn list_all_objects(&self) -> Result<Vec<(String, i64)>, String> {
+        let mut objects = Vec::new();
+        let mut continuation_token: Option<String> = None;
+
+        loop {
+            let mut req = self.client.list_objects_v2().bucket(&self.bucket_name);
+            if let Some(token) = &continuation_token {
+                req = req.continuation_token(token);
+            }
+
+            let resp = req.send().await.map_err(|e| format!("List objects error: {e}"))?;
+
+            if let Some(contents) = resp.contents {
+                for obj in contents {
+                    if let Some(key) = obj.key {
+                        let size = obj.size.unwrap_or(0);
+                        objects.push((key, size));
+                    }
+                }
+            }
+
+            if resp.is_truncated == Some(true) {
+                continuation_token = resp.next_continuation_token;
+            } else {
+                break;
+            }
+        }
+
+        Ok(objects)
+    }
 }

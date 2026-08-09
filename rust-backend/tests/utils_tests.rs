@@ -11,14 +11,14 @@ fn test_format_bytes_utility() {
 
 #[test]
 fn test_get_file_icon_utility() {
-    assert_eq!(get_file_icon("image/jpeg"), "fa-file-image");
-    assert_eq!(get_file_icon("video/mp4"), "fa-file-video");
-    assert_eq!(get_file_icon("audio/mp3"), "fa-file-audio");
-    assert_eq!(get_file_icon("application/pdf"), "fa-file-pdf");
-    assert_eq!(get_file_icon("application/zip"), "fa-file-archive");
-    assert_eq!(get_file_icon("application/msword"), "fa-file-word");
-    assert_eq!(get_file_icon("text/plain"), "fa-file-alt");
-    assert_eq!(get_file_icon("application/octet-stream"), "fa-file");
+    assert_eq!(get_file_icon("test.jpg", "image/jpeg", false), "fa-file-image");
+    assert_eq!(get_file_icon("test.mp4", "video/mp4", false), "fa-file-video");
+    assert_eq!(get_file_icon("test.mp3", "audio/mp3", false), "fa-file-audio");
+    assert_eq!(get_file_icon("test.pdf", "application/pdf", false), "fa-file-pdf");
+    assert_eq!(get_file_icon("test.zip", "application/zip", false), "fa-file-archive");
+    assert_eq!(get_file_icon("test.docx", "application/msword", false), "fa-file-word");
+    assert_eq!(get_file_icon("test.txt", "text/plain", false), "fa-file-alt");
+    assert_eq!(get_file_icon("unknown", "application/octet-stream", false), "fa-file");
 }
 
 #[test]

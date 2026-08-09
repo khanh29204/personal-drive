@@ -7,7 +7,10 @@ use serde::Deserialize;
 use crate::errors::AppError;
 use crate::extractors::auth::{AuthUser, OptionalAuthUser};
 use crate::models::file::File;
-use crate::services::file_service::{FileService, UploadUrlResult};
+use crate::services::file_service::{
+    CleanOrphanResult, DeleteOrphansBody, DeleteOrphansResult, FileService, OrphanFileInfo,
+    StorageQuotaResult, UploadUrlResult,
+};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -43,7 +46,11 @@ pub struct UpdateFileBody {
     pub name: Option<String>,
     #[serde(rename = "isPublic")]
     pub is_public: Option<bool>,
-    #[serde(rename = "folderId")]
+    #[serde(
+        rename = "folderId",
+        default,
+        deserialize_with = "crate::utils::double_option"
+    )]
     pub folder_id: Option<Option<String>>,
     pub url: Option<String>,
     #[serde(rename = "mimeType")]
@@ -222,4 +229,37 @@ pub async fn update_file(
     .await?;
 
     Ok(Json(file))
+}
+
+pub async fn get_storage_quota(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> Result<Json<StorageQuotaResult>, AppError> {
+    let quota = FileService::get_storage_quota(&state.db, Some(&user.id)).await?;
+    Ok(Json(quota))
+}
+
+pub async fn clean_orphan_files(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+) -> Result<Json<CleanOrphanResult>, AppError> {
+    let result = FileService::clean_orphan_files(&state.db, &state.r2).await?;
+    Ok(Json(result))
+}
+
+pub async fn list_orphan_files(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+) -> Result<Json<Vec<OrphanFileInfo>>, AppError> {
+    let list = FileService::list_orphan_files(&state.db, &state.r2).await?;
+    Ok(Json(list))
+}
+
+pub async fn delete_specific_orphans(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Json(body): Json<DeleteOrphansBody>,
+) -> Result<Json<DeleteOrphansResult>, AppError> {
+    let result = FileService::delete_specific_orphans(&state.r2, body.keys).await?;
+    Ok(Json(result))
 }

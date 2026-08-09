@@ -42,6 +42,21 @@
       </header>
 
       {% if user %}
+      <!-- Storage Quota Widget -->
+      <div id="storage-quota-card" class="storage-card">
+        <div class="storage-header">
+          <span><i class="fas fa-database"></i> Dung lượng R2 Free: <strong id="quota-text">Đang tải...</strong></span>
+          <button id="btn-clean-orphans" class="btn-sm-clean" type="button" title="Quét & xoá các file mồ côi / file rác dở dang trên Cloudflare R2">
+            <i class="fas fa-broom"></i> Dọn rác R2
+          </button>
+        </div>
+        <div class="quota-bar-wrapper">
+          <div id="quota-progress-bar" class="quota-bar" style="width: 0%"></div>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if user %}
       <div class="toolbar">
         <button id="btn-new-folder" class="btn-toolbar" type="button">
           <i class="fas fa-folder-plus"></i> Thư mục mới
@@ -56,6 +71,18 @@
       </div>
       <div id="upload-progress-area"></div>
       {% endif %}
+
+      <!-- Category Filter Bar -->
+      <div class="category-filter-bar">
+        <button type="button" class="filter-pill active" data-category="all"><i class="fas fa-th"></i> Tất cả</button>
+        <button type="button" class="filter-pill" data-category="folder"><i class="fas fa-folder"></i> Thư mục</button>
+        <button type="button" class="filter-pill" data-category="image"><i class="fas fa-file-image"></i> Ảnh</button>
+        <button type="button" class="filter-pill" data-category="video"><i class="fas fa-file-video"></i> Video</button>
+        <button type="button" class="filter-pill" data-category="audio"><i class="fas fa-file-audio"></i> Âm thanh</button>
+        <button type="button" class="filter-pill" data-category="doc"><i class="fas fa-file-alt"></i> Tài liệu</button>
+        <button type="button" class="filter-pill" data-category="archive"><i class="fas fa-file-archive"></i> Tệp nén</button>
+        <button type="button" class="filter-pill" data-category="link"><i class="fas fa-link"></i> Liên kết</button>
+      </div>
 
       <div class="table-wrapper">
         <table>
@@ -85,7 +112,7 @@
           </thead>
           <tbody>
             {% if parentHref %}
-            <tr>
+            <tr class="parent-row" data-category="parent">
               <td colspan="4">
                 <div class="file-name">
                   <i class="fas fa-level-up-alt text-secondary"></i>
@@ -96,7 +123,7 @@
             {% endif %}
 
             {% if items | length == 0 %}
-            <tr>
+            <tr id="empty-folder-row">
               <td colspan="4" style="text-align: center; padding: 40px">
                 <span class="text-muted">Thư mục trống</span>
               </td>
@@ -104,7 +131,7 @@
             {% endif %}
 
             {% for item in items %}
-            <tr>
+            <tr class="file-item-row" data-category="{{ item.categoryCode }}">
               <td>
                 <div class="file-name">
                   <i class="fas {{ item.icon }}"></i>
@@ -125,30 +152,43 @@
 
                   {% if item.isOwner %}
                   <div class="row-actions">
-                    <button class="btn-icon" title="{% if item.isPublic %}Chuyển sang riêng tư{% else %}Chuyển sang công khai{% endif %}"
-                      onclick="togglePublic('{{ item.id }}', {{ item.isDirectory | tojson }}, {{ item.isPublic | tojson }})">
+                    <button class="btn-icon btn-toggle-public" type="button"
+                      data-id="{{ item.id }}"
+                      data-is-directory="{% if item.isDirectory %}true{% else %}false{% endif %}"
+                      data-is-public="{% if item.isPublic %}true{% else %}false{% endif %}"
+                      title="{% if item.isPublic %}Chuyển sang riêng tư{% else %}Chuyển sang công khai{% endif %}">
                       <i class="fas {% if item.isPublic %}fa-lock-open{% else %}fa-lock{% endif %}"></i>
                     </button>
-                    <button class="btn-icon" title="Di chuyển"
-                      onclick="openMoveModal('{{ item.id }}', {{ item.isDirectory | tojson }}, `{{ item.name }}`)">
+                    <button class="btn-icon btn-open-move" type="button"
+                      data-id="{{ item.id }}"
+                      data-is-directory="{% if item.isDirectory %}true{% else %}false{% endif %}"
+                      data-name="{{ item.name }}"
+                      title="Di chuyển">
                       <i class="fas fa-arrows-alt"></i>
                     </button>
                     {% if item.externalUrl %}
-                    <button class="btn-icon" title="Sửa liên kết"
-                      onclick="openEditLinkModal('{{ item.id }}', `{{ item.name }}`, `{{ item.externalUrl }}`, `{{ item.mimeType }}`)">
+                    <button class="btn-icon btn-open-edit-link" type="button"
+                      data-id="{{ item.id }}"
+                      data-name="{{ item.name }}"
+                      data-url="{{ item.externalUrl }}"
+                      data-mime="{{ item.mimeType }}"
+                      title="Sửa liên kết">
                       <i class="fas fa-edit"></i>
                     </button>
                     {% endif %}
-                    <button class="btn-icon btn-danger" title="Xoá"
-                      onclick="deleteItem('{{ item.id }}', '{% if item.isDirectory %}folder{% else %}file{% endif %}', `{{ item.name }}`)">
+                    <button class="btn-icon btn-danger btn-delete-item" type="button"
+                      data-id="{{ item.id }}"
+                      data-type="{% if item.isDirectory %}folder{% else %}file{% endif %}"
+                      data-name="{{ item.name }}"
+                      title="Xoá">
                       <i class="fas fa-trash"></i>
                     </button>
                   </div>
                   {% endif %}
                 </div>
               </td>
-              <td class="text-sm" style="color: #4b5563">
-                {% if item.isDirectory %}Thư mục{% else %}Tệp{% endif %}
+              <td class="text-sm">
+                <span class="category-badge cat-{{ item.categoryCode }}">{{ item.category }}</span>
               </td>
               <td class="text-sm hide-size-mobile">{{ item.sizeLabel }}</td>
               <td class="text-sm">
@@ -167,14 +207,14 @@
       <div class="modal-content">
         <h3>Di chuyển "<span id="move-item-name"></span>"</h3>
         <div style="margin: 16px 0;">
-          <label>Chọn thư mục đích:</label>
+          <label for="move-folder-select">Chọn thư mục đích:</label>
           <select id="move-folder-select" style="width:100%; padding: 8px; margin-top: 8px; border-radius: 4px; border: 1px solid #d1d5db;">
             <option value="">-- Màn hình chính --</option>
           </select>
         </div>
         <div style="display: flex; gap: 8px; justify-content: flex-end;">
-          <button id="btn-cancel-move" class="btn-toolbar">Hủy</button>
-          <button id="btn-confirm-move" class="btn-toolbar" style="background:#2563eb; color:white;">Di chuyển</button>
+          <button id="btn-cancel-move" class="btn-toolbar" type="button">Hủy</button>
+          <button id="btn-confirm-move" class="btn-toolbar" type="button" style="background:#2563eb; color:white;">Di chuyển</button>
         </div>
       </div>
     </div>
@@ -184,15 +224,15 @@
         <h3>Liên kết file bên ngoài</h3>
         <form id="link-file-form" style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
           <div>
-            <label>URL File:</label>
+            <label for="link-url">URL File:</label>
             <input type="url" id="link-url" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" placeholder="https://..." />
           </div>
           <div>
-            <label>Tên hiển thị:</label>
+            <label for="link-name">Tên hiển thị:</label>
             <input type="text" id="link-name" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" placeholder="Tên file" />
           </div>
           <div>
-            <label>MimeType:</label>
+            <label for="link-mime">MimeType:</label>
             <input type="text" id="link-mime" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" placeholder="video/mp4, image/jpeg, ..." />
           </div>
           <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
@@ -209,15 +249,15 @@
         <form id="edit-link-form" style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
           <input type="hidden" id="edit-link-id" />
           <div>
-            <label>URL File:</label>
+            <label for="edit-link-url">URL File:</label>
             <input type="url" id="edit-link-url" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" />
           </div>
           <div>
-            <label>Tên hiển thị:</label>
+            <label for="edit-link-name">Tên hiển thị:</label>
             <input type="text" id="edit-link-name" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" />
           </div>
           <div>
-            <label>MimeType:</label>
+            <label for="edit-link-mime">MimeType:</label>
             <input type="text" id="edit-link-mime" required style="width:100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px;" />
           </div>
           <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
@@ -228,12 +268,38 @@
       </div>
     </div>
 
+    <div id="orphans-modal" class="modal" style="display:none">
+      <div class="modal-content" style="max-width: 600px; width: 95%;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h3 style="margin:0;"><i class="fas fa-broom"></i> Quản lý File Mồ Côi trên R2</h3>
+          <button id="btn-close-orphans-modal" class="btn-icon" type="button" style="font-size: 18px; color: #6b7280;">&times;</button>
+        </div>
+        <p style="font-size: 13px; color: #6b7280; margin-top: 0;">Danh sách file đang tồn tại thực tế trên Cloudflare R2 nhưng không có dữ liệu trong Database.</p>
+        
+        <div id="orphans-list-container" style="max-height: 320px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 16px;">
+          <div style="text-align: center; padding: 20px; color: #6b7280;">Đang quét R2...</div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <button id="btn-delete-selected-orphans" class="btn-toolbar" type="button" style="background: #dc2626; color: white; border: none; display: none;">
+            <i class="fas fa-trash"></i> Xoá file đã chọn (<span id="selected-orphan-count">0</span>)
+          </button>
+          <button id="btn-clean-all-orphans-modal" class="btn-toolbar" type="button" style="background: #2563eb; color: white; border: none;">
+            <i class="fas fa-magic"></i> Xoá tất cả
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script id="drive-config" type="application/json">
+      {
+        "currentFolderId": {{ currentFolderId | tojson }},
+        "user": {{ user | tojson }},
+        "allFolders": {{ allFolders | tojson }}
+      }
+    </script>
     <script>
-      window.__DRIVE_CONFIG__ = {
-        currentFolderId: {{ currentFolderId_json | safe }},
-        user: {{ user_json | safe }},
-        allFolders: {{ allFolders_json | safe }},
-      };
+      window.__DRIVE_CONFIG__ = JSON.parse(document.getElementById('drive-config').textContent || '{}');
     </script>
     <script src="/app.js" defer></script>
   </body>

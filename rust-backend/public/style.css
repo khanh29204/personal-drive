@@ -74,6 +74,60 @@ h1 {
   margin: 0;
 }
 
+/* ── storage quota card ───────────────────────────────────────── */
+.storage-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.storage-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #374151;
+  margin-bottom: 8px;
+}
+
+.quota-bar-wrapper {
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.quota-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #3b82f6);
+  border-radius: 4px;
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.btn-sm-clean {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-sm-clean:hover {
+  background: #f3f4f6;
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
 .table-wrapper {
   background: #fff;
   border-radius: 12px;
@@ -129,10 +183,6 @@ td {
 
 .item-link:hover {
   text-decoration: underline;
-}
-
-.btn-download-wrapper {
-  /* Removed margin-left: auto to let .file-info-group flex: 1 push it */
 }
 
 .btn-icon {
@@ -314,3 +364,60 @@ td {
   font-size: 18px;
   margin-bottom: 16px;
 }
+
+/* ── Category Filter Bar & Badges ───────────────────────────────────── */
+.category-filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #4b5563;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.filter-pill:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.filter-pill.active {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+}
+
+.category-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.cat-folder { background: #eff6ff; color: #1d4ed8; }
+.cat-image { background: #fdf2f8; color: #db2777; }
+.cat-video { background: #fff7ed; color: #c2410c; }
+.cat-audio { background: #f0fdf4; color: #15803d; }
+.cat-doc { background: #f0f9ff; color: #0369a1; }
+.cat-archive { background: #fefce8; color: #a16207; }
+.cat-link { background: #faf5ff; color: #7e22ce; }
+

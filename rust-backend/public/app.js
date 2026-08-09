@@ -66,6 +66,33 @@
     });
   }
 
+  // ── Category Filter Bar Logic ────────────────────────────────────
+  var filterPills = document.querySelectorAll('.filter-pill');
+  if (filterPills.length > 0) {
+    filterPills.forEach(function (pill) {
+      pill.addEventListener('click', function () {
+        filterPills.forEach(function (p) { p.classList.remove('active'); });
+        pill.classList.add('active');
+
+        var selectedCat = pill.getAttribute('data-category');
+        var rows = document.querySelectorAll('.file-item-row');
+
+        rows.forEach(function (row) {
+          var rowCat = row.getAttribute('data-category');
+          if (selectedCat === 'all' || rowCat === selectedCat) {
+            row.style.display = '';
+          } else {
+            row.style.display = 'none';
+          }
+        });
+
+        // Show parent row if present
+        var parentRow = document.querySelector('.parent-row');
+        if (parentRow) parentRow.style.display = '';
+      });
+    });
+  }
+
   // ── Create Folder ──────────────────────────────────────────────
   var btnNewFolder = document.getElementById('btn-new-folder');
   if (btnNewFolder) {
@@ -225,6 +252,46 @@
     }
   };
 
+  // ── Delegated Event Listeners for Table Item Actions ────────────
+  document.addEventListener('click', function (e) {
+    var btnToggle = e.target.closest('.btn-toggle-public');
+    if (btnToggle) {
+      var id = btnToggle.getAttribute('data-id');
+      var isDir = btnToggle.getAttribute('data-is-directory') === 'true';
+      var isPub = btnToggle.getAttribute('data-is-public') === 'true';
+      window.togglePublic(id, isDir, isPub);
+      return;
+    }
+
+    var btnMove = e.target.closest('.btn-open-move');
+    if (btnMove) {
+      var idMove = btnMove.getAttribute('data-id');
+      var isDirMove = btnMove.getAttribute('data-is-directory') === 'true';
+      var nameMove = btnMove.getAttribute('data-name');
+      window.openMoveModal(idMove, isDirMove, nameMove);
+      return;
+    }
+
+    var btnEditLink = e.target.closest('.btn-open-edit-link');
+    if (btnEditLink) {
+      var idEdit = btnEditLink.getAttribute('data-id');
+      var nameEdit = btnEditLink.getAttribute('data-name');
+      var urlEdit = btnEditLink.getAttribute('data-url');
+      var mimeEdit = btnEditLink.getAttribute('data-mime');
+      window.openEditLinkModal(idEdit, nameEdit, urlEdit, mimeEdit);
+      return;
+    }
+
+    var btnDelete = e.target.closest('.btn-delete-item');
+    if (btnDelete) {
+      var idDel = btnDelete.getAttribute('data-id');
+      var typeDel = btnDelete.getAttribute('data-type');
+      var nameDel = btnDelete.getAttribute('data-name');
+      window.deleteItem(idDel, typeDel, nameDel);
+      return;
+    }
+  });
+
   // ── Delete Item ────────────────────────────────────────────────
   window.deleteItem = async function (id, type, name) {
     if (!confirm('Xoá "' + name + '"? Không thể hoàn tác.')) return;
@@ -247,46 +314,67 @@
   
   var currentMoveTarget = null;
 
-  if (moveModal && config.allFolders) {
-    config.allFolders.forEach(function(folder) {
-      var option = document.createElement('option');
-      option.value = folder._id;
-      option.textContent = folder.name;
-      moveFolderSelect.appendChild(option);
-    });
+  function populateMoveFolders() {
+    if (!moveFolderSelect) return;
+    moveFolderSelect.innerHTML = '<option value="">-- Màn hình chính --</option>';
+    
+    var folders = config.allFolders || [];
+    if (Array.isArray(folders)) {
+      folders.forEach(function(folder) {
+        var folderId = (folder._id && typeof folder._id === 'object' && folder._id.$oid) 
+          ? folder._id.$oid 
+          : (folder._id || folder.id);
 
-    btnCancelMove.addEventListener('click', function() {
-      moveModal.style.display = 'none';
-      currentMoveTarget = null;
-    });
+        if (folderId) {
+          var option = document.createElement('option');
+          option.value = folderId;
+          option.textContent = folder.name;
+          moveFolderSelect.appendChild(option);
+        }
+      });
+    }
+  }
 
-    btnConfirmMove.addEventListener('click', async function() {
-      if (!currentMoveTarget) return;
-      var endpoint = currentMoveTarget.isDirectory ? '/api/folders/' : '/api/files/';
-      var body = currentMoveTarget.isDirectory 
-        ? { parentId: moveFolderSelect.value || null } 
-        : { folderId: moveFolderSelect.value || null };
-      
-      try {
-        btnConfirmMove.disabled = true;
-        await apiCall(endpoint + currentMoveTarget.id, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-        showToast('Đã di chuyển thành công', 'success');
-        window.location.reload();
-      } catch (err) {
-        showToast(err.message, 'error');
-        btnConfirmMove.disabled = false;
-      }
-    });
+  if (moveModal) {
+    populateMoveFolders();
+
+    if (btnCancelMove) {
+      btnCancelMove.addEventListener('click', function() {
+        moveModal.style.display = 'none';
+        currentMoveTarget = null;
+      });
+    }
+
+    if (btnConfirmMove) {
+      btnConfirmMove.addEventListener('click', async function() {
+        if (!currentMoveTarget) return;
+        var endpoint = currentMoveTarget.isDirectory ? '/api/folders/' : '/api/files/';
+        var body = currentMoveTarget.isDirectory 
+          ? { parentId: moveFolderSelect.value || null } 
+          : { folderId: moveFolderSelect.value || null };
+        
+        try {
+          btnConfirmMove.disabled = true;
+          await apiCall(endpoint + currentMoveTarget.id, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          showToast('Đã di chuyển thành công', 'success');
+          window.location.reload();
+        } catch (err) {
+          showToast(err.message, 'error');
+          btnConfirmMove.disabled = false;
+        }
+      });
+    }
   }
 
   window.openMoveModal = function(id, isDirectory, name) {
     if (!moveModal) return;
     currentMoveTarget = { id: id, isDirectory: isDirectory };
     moveItemName.textContent = name;
+    populateMoveFolders();
     moveFolderSelect.value = ''; 
     
     var options = moveFolderSelect.options;
@@ -398,6 +486,184 @@
     });
   }
 
+  // ── Storage Quota & Interactive Orphan Management ──────────────────────────────
+  async function loadStorageQuota() {
+    var quotaText = document.getElementById('quota-text');
+    var progressBar = document.getElementById('quota-progress-bar');
+    if (!quotaText || !progressBar) return;
+
+    try {
+      var data = await apiCall('/api/files/storage/quota', { method: 'GET' });
+      quotaText.textContent = data.usedFormatted + ' / ' + data.freeTierLimitFormatted + ' (' + data.usedPercentage + '%)';
+      progressBar.style.width = Math.min(data.usedPercentage, 100) + '%';
+      if (data.usedPercentage > 85) {
+        progressBar.style.background = '#ef4444';
+      } else if (data.usedPercentage > 70) {
+        progressBar.style.background = '#f59e0b';
+      } else {
+        progressBar.style.background = 'linear-gradient(90deg, #2563eb, #3b82f6)';
+      }
+    } catch (_err) {
+      quotaText.textContent = 'Lỗi nạp dung lượng';
+    }
+  }
+
+  loadStorageQuota();
+
+  var orphansModal = document.getElementById('orphans-modal');
+  var btnCleanOrphans = document.getElementById('btn-clean-orphans');
+  var btnCloseOrphansModal = document.getElementById('btn-close-orphans-modal');
+  var orphansListContainer = document.getElementById('orphans-list-container');
+  var btnDeleteSelectedOrphans = document.getElementById('btn-delete-selected-orphans');
+  var btnCleanAllOrphansModal = document.getElementById('btn-clean-all-orphans-modal');
+  var selectedOrphanCountEl = document.getElementById('selected-orphan-count');
+
+  var currentOrphans = [];
+
+  if (btnCleanOrphans && orphansModal) {
+    btnCleanOrphans.addEventListener('click', function () {
+      orphansModal.style.display = 'flex';
+      loadOrphanFiles();
+    });
+
+    if (btnCloseOrphansModal) {
+      btnCloseOrphansModal.addEventListener('click', function () {
+        orphansModal.style.display = 'none';
+      });
+    }
+
+    async function loadOrphanFiles() {
+      if (!orphansListContainer) return;
+      orphansListContainer.innerHTML = '<div style="text-align: center; padding: 24px; color: #6b7280;"><i class="fas fa-spinner fa-spin"></i> Đang quét dữ liệu R2...</div>';
+      btnDeleteSelectedOrphans.style.display = 'none';
+
+      try {
+        currentOrphans = await apiCall('/api/files/storage/orphans', { method: 'GET' });
+        renderOrphansList();
+      } catch (err) {
+        orphansListContainer.innerHTML = '<div style="text-align: center; padding: 24px; color: #dc2626;">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    function renderOrphansList() {
+      if (!currentOrphans || currentOrphans.length === 0) {
+        orphansListContainer.innerHTML = '<div style="text-align: center; padding: 24px; color: #22c55e;"><i class="fas fa-check-circle"></i> Sạch sẽ! Không có file mồ côi nào trên Cloudflare R2.</div>';
+        btnCleanAllOrphansModal.style.display = 'none';
+        btnDeleteSelectedOrphans.style.display = 'none';
+        return;
+      }
+
+      btnCleanAllOrphansModal.style.display = 'inline-flex';
+
+      var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">' +
+        '<thead><tr style="background:#f9fafb; border-bottom:1px solid #e5e7eb;">' +
+        '<th style="width:36px; text-align:center; padding:8px;"><input type="checkbox" id="chk-select-all-orphans" /></th>' +
+        '<th style="padding:8px; text-align:left;">Tên File trên R2</th>' +
+        '<th style="padding:8px; text-align:right; width:100px;">Kích thước</th>' +
+        '<th style="padding:8px; text-align:center; width:70px;">Hành động</th>' +
+        '</tr></thead><tbody>';
+
+      currentOrphans.forEach(function (item, idx) {
+        html += '<tr style="border-bottom:1px solid #f3f4f6;">' +
+          '<td style="text-align:center; padding:8px;"><input type="checkbox" class="chk-orphan-item" data-key="' + escapeHtml(item.key) + '" /></td>' +
+          '<td style="padding:8px; word-break:break-all;"><i class="fas fa-file-alt text-muted" style="margin-right:6px;"></i>' + escapeHtml(item.name) + '</td>' +
+          '<td style="padding:8px; text-align:right; color:#4b5563;">' + escapeHtml(item.sizeFormatted) + '</td>' +
+          '<td style="padding:8px; text-align:center;"><button class="btn-icon btn-danger btn-delete-single-orphan" data-key="' + escapeHtml(item.key) + '" title="Xoá file này"><i class="fas fa-trash"></i></button></td>' +
+          '</tr>';
+      });
+
+      html += '</tbody></table>';
+      orphansListContainer.innerHTML = html;
+
+      // Bind events
+      var chkAll = document.getElementById('chk-select-all-orphans');
+      var itemChks = document.querySelectorAll('.chk-orphan-item');
+
+      if (chkAll) {
+        chkAll.addEventListener('change', function () {
+          itemChks.forEach(function (chk) { chk.checked = chkAll.checked; });
+          updateSelectedOrphansCount();
+        });
+      }
+
+      itemChks.forEach(function (chk) {
+        chk.addEventListener('change', updateSelectedOrphansCount);
+      });
+
+      document.querySelectorAll('.btn-delete-single-orphan').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var key = btn.getAttribute('data-key');
+          deleteOrphanKeys([key]);
+        });
+      });
+    }
+
+    function updateSelectedOrphansCount() {
+      var selected = document.querySelectorAll('.chk-orphan-item:checked');
+      var count = selected.length;
+      selectedOrphanCountEl.textContent = count;
+      if (count > 0) {
+        btnDeleteSelectedOrphans.style.display = 'inline-flex';
+      } else {
+        btnDeleteSelectedOrphans.style.display = 'none';
+      }
+    }
+
+    async function deleteOrphanKeys(keys) {
+      if (!keys || keys.length === 0) return;
+      if (!confirm('Xoá ' + keys.length + ' file mồ côi đã chọn khỏi Cloudflare R2?')) return;
+
+      try {
+        var res = await apiCall('/api/files/storage/orphans', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keys: keys }),
+        });
+
+        showToast('Đã xoá ' + res.deletedCount + ' file (' + res.freedFormatted + ')', 'success');
+        await loadOrphanFiles();
+        await loadStorageQuota();
+      } catch (err) {
+        showToast(err.message || 'Lỗi xoá file', 'error');
+      }
+    }
+
+    if (btnDeleteSelectedOrphans) {
+      btnDeleteSelectedOrphans.addEventListener('click', function () {
+        var selected = document.querySelectorAll('.chk-orphan-item:checked');
+        var keys = [];
+        selected.forEach(function (chk) {
+          keys.push(chk.getAttribute('data-key'));
+        });
+        deleteOrphanKeys(keys);
+      });
+    }
+
+    if (btnCleanAllOrphansModal) {
+      btnCleanAllOrphansModal.addEventListener('click', async function () {
+        if (!confirm('Xoá tất cả file mồ côi đang có trên R2?')) return;
+        try {
+          btnCleanAllOrphansModal.disabled = true;
+          var res = await apiCall('/api/files/storage/clean-orphans', { method: 'POST' });
+          showToast('Đã xoá ' + res.deletedOrphanR2Objects + ' file mồ côi (' + res.freedFormatted + ')', 'success');
+          await loadOrphanFiles();
+          await loadStorageQuota();
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          btnCleanAllOrphansModal.disabled = false;
+        }
+      });
+    }
+  }
+
+  // ── Global Modal Backdrop Click Handler ──────────────────────────
+  window.addEventListener('click', function (e) {
+    if (e.target.classList && e.target.classList.contains('modal')) {
+      e.target.style.display = 'none';
+    }
+  });
+
   // ── Escape HTML helper ─────────────────────────────────────────
   function escapeHtml(str) {
     var div = document.createElement('div');
@@ -405,3 +671,6 @@
     return div.innerHTML;
   }
 })();
+
+
+

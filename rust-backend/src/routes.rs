@@ -60,6 +60,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/files", get(file_handler::list_files))
         .route("/api/files/upload-url", post(file_handler::request_upload_url))
         .route("/api/files/link", post(file_handler::create_linked_file))
+        .route("/api/files/storage/quota", get(file_handler::get_storage_quota))
+        .route("/api/files/storage/clean-orphans", post(file_handler::clean_orphan_files))
+        .route(
+            "/api/files/storage/orphans",
+            get(file_handler::list_orphan_files).delete(file_handler::delete_specific_orphans),
+        )
         .route("/api/files/{id}/complete", post(file_handler::complete_upload))
         .route("/api/files/{id}/download-url", get(file_handler::get_download_url))
         .route(

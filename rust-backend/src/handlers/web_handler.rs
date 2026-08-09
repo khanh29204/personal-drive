@@ -7,7 +7,9 @@ use crate::errors::AppError;
 use crate::extractors::auth::OptionalAuthUser;
 use crate::services::file_service::FileService;
 use crate::services::folder_service::FolderService;
-use crate::utils::file_display::{format_bytes, get_file_icon};
+use crate::utils::file_display::{
+    format_bytes, get_file_category_code, get_file_category_label, get_file_icon,
+};
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -27,6 +29,9 @@ pub struct DisplayItem {
     #[serde(rename = "isDirectory")]
     pub is_directory: bool,
     pub icon: String,
+    pub category: String,
+    #[serde(rename = "categoryCode")]
+    pub category_code: String,
     #[serde(rename = "sizeLabel")]
     pub size_label: String,
     #[serde(rename = "sizeRaw")]
@@ -97,6 +102,8 @@ pub async fn render_home(
                 name: f.name,
                 is_directory: true,
                 icon: "fa-folder".to_string(),
+                category: "Thư mục".to_string(),
+                category_code: "folder".to_string(),
                 size_label: "-".to_string(),
                 size_raw: -1,
                 mime_type: String::new(),
@@ -114,11 +121,18 @@ pub async fn render_home(
         .into_iter()
         .map(|f| {
             let fid = f.id.map(|i| i.to_hex()).unwrap_or_default();
+            let is_linked = f.external_url.is_some();
+            let icon = get_file_icon(&f.name, &f.mime_type, is_linked);
+            let category = get_file_category_label(&f.name, &f.mime_type, is_linked);
+            let category_code = get_file_category_code(&f.name, &f.mime_type, is_linked).to_string();
+
             DisplayItem {
                 id: fid.clone(),
                 name: f.name.clone(),
                 is_directory: false,
-                icon: get_file_icon(&f.mime_type),
+                icon,
+                category,
+                category_code,
                 size_label: format_bytes(f.size),
                 size_raw: f.size,
                 mime_type: f.mime_type,
@@ -136,8 +150,8 @@ pub async fn render_home(
     let cmp = |a: &DisplayItem, b: &DisplayItem| -> std::cmp::Ordering {
         let res = match sort_by {
             "type" => {
-                let ta = if a.is_directory { &a.name } else { &a.mime_type };
-                let tb = if b.is_directory { &b.name } else { &b.mime_type };
+                let ta = if a.is_directory { &a.name } else { &a.category };
+                let tb = if b.is_directory { &b.name } else { &b.category };
                 ta.to_lowercase().cmp(&tb.to_lowercase())
             }
             "size" => a.size_raw.cmp(&b.size_raw),
@@ -191,9 +205,7 @@ pub async fn render_home(
         sortBy => sort_by,
         order => order,
         currentFolderId => current_folder_id_str,
-        currentFolderId_json => serde_json::to_string(&current_folder_id_str).unwrap_or_default(),
-        user_json => serde_json::to_string(&user).unwrap_or_default(),
-        allFolders_json => serde_json::to_string(&all_folders).unwrap_or_default(),
+        allFolders => all_folders,
         currentPath => current_path,
         current_title => current_title,
     };

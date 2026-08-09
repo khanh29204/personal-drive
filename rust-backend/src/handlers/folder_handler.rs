@@ -28,7 +28,11 @@ pub struct CreateFolderBody {
 #[derive(Debug, Deserialize)]
 pub struct UpdateFolderBody {
     pub name: Option<String>,
-    #[serde(rename = "parentId")]
+    #[serde(
+        rename = "parentId",
+        default,
+        deserialize_with = "crate::utils::double_option"
+    )]
     pub parent_id: Option<Option<String>>,
     #[serde(rename = "isPublic")]
     pub is_public: Option<bool>,

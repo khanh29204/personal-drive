@@ -17,6 +17,49 @@ pub struct UploadUrlResult {
     pub upload_url: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageQuotaResult {
+    pub used_bytes: i64,
+    pub used_formatted: String,
+    pub free_tier_limit_bytes: i64,
+    pub free_tier_limit_formatted: String,
+    pub remaining_bytes: i64,
+    pub remaining_formatted: String,
+    pub used_percentage: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanOrphanResult {
+    pub deleted_orphan_r2_objects: usize,
+    pub deleted_stale_pending_records: u64,
+    pub freed_bytes: i64,
+    pub freed_formatted: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanFileInfo {
+    pub key: String,
+    pub name: String,
+    pub size: i64,
+    pub size_formatted: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteOrphansResult {
+    pub deleted_count: usize,
+    pub freed_bytes: i64,
+    pub freed_formatted: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteOrphansBody {
+    pub keys: Vec<String>,
+}
+
 pub struct FileService;
 
 impl FileService {
@@ -363,5 +406,185 @@ impl FileService {
         cache.insert(file_id.to_hex(), file.clone()).await;
 
         Ok(file)
+    }
+
+    pub async fn get_storage_quota(
+        db: &Database,
+        owner_id: Option<&str>,
+    ) -> Result<StorageQuotaResult, AppError> {
+        let collection = db.collection::<File>("files");
+        let filter = if let Some(oid) = owner_id {
+            doc! { "ownerId": oid, "status": "completed" }
+        } else {
+            doc! { "status": "completed" }
+        };
+
+        let mut cursor = collection
+            .find(filter)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        let mut used_bytes: i64 = 0;
+        use futures::StreamExt;
+        while let Some(result) = cursor.next().await {
+            if let Ok(file) = result {
+                if file.external_url.is_none() {
+                    used_bytes += file.size;
+                }
+            }
+        }
+
+        let free_tier_limit_bytes: i64 = 10 * 1024 * 1024 * 1024; // 10 GB Free Tier limit
+        let remaining_bytes = (free_tier_limit_bytes - used_bytes).max(0);
+        let used_percentage = if free_tier_limit_bytes > 0 {
+            ((used_bytes as f64) / (free_tier_limit_bytes as f64)) * 100.0
+        } else {
+            0.0
+        };
+
+        Ok(StorageQuotaResult {
+            used_bytes,
+            used_formatted: crate::utils::file_display::format_bytes(used_bytes),
+            free_tier_limit_bytes,
+            free_tier_limit_formatted: crate::utils::file_display::format_bytes(free_tier_limit_bytes),
+            remaining_bytes,
+            remaining_formatted: crate::utils::file_display::format_bytes(remaining_bytes),
+            used_percentage: (used_percentage * 100.0).round() / 100.0,
+        })
+    }
+
+    pub async fn clean_orphan_files(
+        db: &Database,
+        r2: &R2Service,
+    ) -> Result<CleanOrphanResult, AppError> {
+        let collection = db.collection::<File>("files");
+
+        let mut cursor = collection
+            .find(doc! {})
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        use std::collections::HashSet;
+        use futures::StreamExt;
+        let mut valid_keys = HashSet::new();
+
+        while let Some(result) = cursor.next().await {
+            if let Ok(file) = result {
+                valid_keys.insert(file.key);
+            }
+        }
+
+        let stale_cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
+        let stale_pending_filter = doc! {
+            "status": "pending",
+            "createdAt": { "$lt": stale_cutoff }
+        };
+
+        let mut stale_cursor = collection
+            .find(stale_pending_filter.clone())
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        while let Some(result) = stale_cursor.next().await {
+            if let Ok(stale_file) = result {
+                let _ = r2.delete_object(&stale_file.key).await;
+            }
+        }
+
+        let delete_res = collection
+            .delete_many(stale_pending_filter)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let deleted_stale_count = delete_res.deleted_count;
+
+        let r2_objects = r2.list_all_objects().await.map_err(AppError::Internal)?;
+        let mut deleted_orphan_r2_objects = 0;
+        let mut freed_bytes: i64 = 0;
+
+        for (key, size) in r2_objects {
+            if !valid_keys.contains(&key) {
+                if r2.delete_object(&key).await.is_ok() {
+                    deleted_orphan_r2_objects += 1;
+                    freed_bytes += size;
+                }
+            }
+        }
+
+        Ok(CleanOrphanResult {
+            deleted_orphan_r2_objects,
+            deleted_stale_pending_records: deleted_stale_count,
+            freed_bytes,
+            freed_formatted: crate::utils::file_display::format_bytes(freed_bytes),
+        })
+    }
+
+    pub async fn list_orphan_files(
+        db: &Database,
+        r2: &R2Service,
+    ) -> Result<Vec<OrphanFileInfo>, AppError> {
+        let collection = db.collection::<File>("files");
+
+        let mut cursor = collection
+            .find(doc! {})
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        use std::collections::HashSet;
+        use futures::StreamExt;
+        let mut valid_keys = HashSet::new();
+
+        while let Some(result) = cursor.next().await {
+            if let Ok(file) = result {
+                valid_keys.insert(file.key);
+            }
+        }
+
+        let r2_objects = r2.list_all_objects().await.map_err(AppError::Internal)?;
+        let mut orphans = Vec::new();
+
+        for (key, size) in r2_objects {
+            if !valid_keys.contains(&key) {
+                let name = key
+                    .rsplit_once('/')
+                    .map(|(_, name)| name)
+                    .unwrap_or(&key)
+                    .to_string();
+
+                orphans.push(OrphanFileInfo {
+                    name,
+                    size_formatted: crate::utils::file_display::format_bytes(size),
+                    key,
+                    size,
+                });
+            }
+        }
+
+        Ok(orphans)
+    }
+
+    pub async fn delete_specific_orphans(
+        r2: &R2Service,
+        keys: Vec<String>,
+    ) -> Result<DeleteOrphansResult, AppError> {
+        let r2_objects = r2.list_all_objects().await.map_err(AppError::Internal)?;
+        use std::collections::HashMap;
+        let size_map: HashMap<String, i64> = r2_objects.into_iter().collect();
+
+        let mut deleted_count = 0;
+        let mut freed_bytes: i64 = 0;
+
+        for key in keys {
+            let size = size_map.get(&key).copied().unwrap_or(0);
+            if r2.delete_object(&key).await.is_ok() {
+                deleted_count += 1;
+                freed_bytes += size;
+            }
+        }
+
+        Ok(DeleteOrphansResult {
+            deleted_count,
+            freed_bytes,
+            freed_formatted: crate::utils::file_display::format_bytes(freed_bytes),
+        })
     }
 }
