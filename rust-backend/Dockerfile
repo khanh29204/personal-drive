@@ -16,15 +16,18 @@ RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target,target=/app/target \
     cargo chef cook --release --recipe-path recipe.json
 
-# Copy source code thực tế và build ứng dụng
+# Copy duy nhất source code Rust để biên dịch binary
 COPY Cargo.toml Cargo.lock* build.rs ./
 COPY proto ./proto
 COPY src ./src
-COPY templates ./templates
-COPY public ./public
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target,target=/app/target \
     cargo build --release && cp /app/target/release/rust-backend /app/rust-backend
+
+# Copy giao diện tĩnh (HTML/CSS/JS) SAU KHI đã biên dịch xong binary Rust
+# Giúp việc chỉnh sửa FE KHÔNG BAO GIỜ kích hoạt lại bước cargo build!
+COPY templates ./templates
+COPY public ./public
 
 FROM alpine:3.20 AS runner
 WORKDIR /app
