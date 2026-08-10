@@ -8,8 +8,8 @@ use crate::errors::AppError;
 use crate::extractors::auth::{AuthUser, OptionalAuthUser};
 use crate::models::file::File;
 use crate::services::file_service::{
-    CleanOrphanResult, DeleteOrphansBody, DeleteOrphansResult, FileService, OrphanFileInfo,
-    StorageQuotaResult, UploadUrlResult,
+    CleanOrphanResult, CompleteMultipartBody, DeleteOrphansBody, DeleteOrphansResult, FileService,
+    OrphanFileInfo, PartUrlsResult, StorageQuotaResult, UploadUrlResult,
 };
 use crate::AppState;
 
@@ -29,6 +29,12 @@ pub struct UploadUrlBody {
     pub folder_id: Option<String>,
     #[serde(rename = "isPublic", default)]
     pub is_public: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PartUrlsBody {
+    #[serde(rename = "partNumbers")]
+    pub part_numbers: Vec<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +132,69 @@ pub async fn complete_upload(
             .await?;
 
     Ok(Json(file))
+}
+
+pub async fn create_part_urls(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<PartUrlsBody>,
+) -> Result<Json<PartUrlsResult>, AppError> {
+    let file_oid =
+        ObjectId::parse_str(&id).map_err(|_| AppError::bad_request("id không hợp lệ"))?;
+
+    let result = FileService::create_part_urls(
+        &state.db,
+        &state.r2,
+        &file_oid,
+        &user.id,
+        body.part_numbers,
+    )
+    .await?;
+
+    Ok(Json(result))
+}
+
+pub async fn complete_multipart_upload(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<CompleteMultipartBody>,
+) -> Result<Json<File>, AppError> {
+    let file_oid =
+        ObjectId::parse_str(&id).map_err(|_| AppError::bad_request("id không hợp lệ"))?;
+
+    let file = FileService::complete_multipart_upload(
+        &state.db,
+        &state.r2,
+        &state.file_cache,
+        &file_oid,
+        &user.id,
+        body.parts,
+    )
+    .await?;
+
+    Ok(Json(file))
+}
+
+pub async fn abort_upload(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let file_oid =
+        ObjectId::parse_str(&id).map_err(|_| AppError::bad_request("id không hợp lệ"))?;
+
+    FileService::abort_upload(
+        &state.db,
+        &state.r2,
+        &state.file_cache,
+        &file_oid,
+        &user.id,
+    )
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn get_download_url(

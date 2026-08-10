@@ -278,10 +278,20 @@
     }
   });
 
-  // Gọi /complete với backoff. Chỉ thử lại khi lỗi có thể là tạm thời (5xx,
-  // mất mạng); lỗi 4xx như "không tìm thấy file trên R2" thì thử lại vô nghĩa.
-  function completeUploadWithRetry(fileId, attemptsLeft) {
-    return apiCall('/api/files/' + fileId + '/complete', { method: 'POST' }).catch(function (err) {
+  var CANCELLED_MESSAGE = 'Đã hủy tải lên';
+  // Số part gửi song song. Cao hơn hầu như không nhanh thêm vì đường lên mới là
+  // nút cổ chai, nhưng làm số đo tốc độ nhảy loạn và giữ nhiều blob trong RAM.
+  var PART_CONCURRENCY = 3;
+  // Xin URL theo lô thay vì xin hết một lượt: file lớn nhất có tới 10.000 part.
+  // Chia lô theo dung lượng để lô nào cũng gửi xong trước khi URL hết hạn.
+  var PART_URL_BATCH_BYTES = 512 * 1024 * 1024;
+  var PART_URL_BATCH_LIMIT = 100; // trần server đặt cho mỗi request
+  var PART_ATTEMPTS = 3;
+
+  // Gọi API với backoff. Chỉ thử lại khi lỗi có thể là tạm thời (5xx, mất
+  // mạng); lỗi 4xx như "không tìm thấy file trên R2" thì thử lại vô nghĩa.
+  function postWithRetry(url, options, attemptsLeft) {
+    return apiCall(url, options).catch(function (err) {
       var retryable = !err.status || err.status >= 500;
       if (attemptsLeft <= 1 || !retryable) throw err;
 
@@ -289,9 +299,96 @@
       return new Promise(function (resolve) {
         setTimeout(resolve, delayMs);
       }).then(function () {
-        return completeUploadWithRetry(fileId, attemptsLeft - 1);
+        return postWithRetry(url, options, attemptsLeft - 1);
       });
     });
+  }
+
+  // R2 nói rõ lý do trong body XML (<Code>EntityTooLarge</Code>…) và CORS cho
+  // phép đọc. Chỉ hiện "HTTP 400" thì mọi nguyên nhân trông giống hệt nhau —
+  // đúng cái đã khiến lỗi vượt dung lượng bị nhầm thành lỗi chữ ký.
+  function describeUploadError(xhr) {
+    var detail = '';
+    try {
+      var body = xhr.responseText || '';
+      var code = (body.match(/<Code>([^<]*)<\/Code>/) || [])[1];
+      var message = (body.match(/<Message>([^<]*)<\/Message>/) || [])[1];
+      detail = [code, message]
+        .filter(function (part) {
+          return !!part;
+        })
+        .join(': ');
+    } catch (_e) {
+      /* responseText không đọc được với vài responseType */
+    }
+    return 'Upload thất bại (HTTP ' + xhr.status + ')' + (detail ? ' — ' + detail : '');
+  }
+
+  // PUT một blob lên R2. `contentType` phải khớp đúng cái server đã ký: bỏ sót
+  // hay thêm thừa header này đều làm chữ ký lệch.
+  function sendBlob(url, blob, contentType, handlers) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('PUT', url, true);
+      if (contentType) xhr.setRequestHeader('Content-Type', contentType);
+
+      xhr.upload.addEventListener('progress', function (e) {
+        if (e.lengthComputable && handlers.onProgress) handlers.onProgress(e.loaded);
+      });
+
+      // loadend bắn sau cả load, error lẫn abort nên không bỏ sót trường hợp nào.
+      xhr.addEventListener('loadend', function () {
+        if (handlers.onXhrDone) handlers.onXhrDone(xhr);
+      });
+
+      xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(xhr);
+        } else {
+          var err = new Error(describeUploadError(xhr));
+          err.status = xhr.status;
+          reject(err);
+        }
+      };
+
+      xhr.onerror = function () {
+        reject(new Error('Lỗi kết nối mạng khi tải file'));
+      };
+
+      xhr.onabort = function () {
+        reject(new Error(CANCELLED_MESSAGE));
+      };
+
+      // Phải send() trước rồi mới đăng ký: abort() trên một xhr chưa send không
+      // bắn sự kiện abort, promise sẽ treo mãi. Giữa hai dòng này không có điểm
+      // nhả luồng nào nên không sót request khỏi danh sách hủy.
+      xhr.send(blob);
+      if (handlers.onXhr) handlers.onXhr(xhr);
+    });
+  }
+
+  // Chạy `worker` trên từng phần tử, tối đa `limit` việc cùng lúc. Khi một việc
+  // lỗi thì không nhận thêm việc mới, nhưng việc đang chạy vẫn chạy nốt — nơi
+  // gọi chịu trách nhiệm abort nếu muốn dừng ngay.
+  function runWithConcurrency(items, limit, worker) {
+    var nextIndex = 0;
+    var stopped = false;
+
+    function runNext() {
+      if (stopped || nextIndex >= items.length) return Promise.resolve();
+      var item = items[nextIndex++];
+      return worker(item).then(runNext, function (err) {
+        stopped = true;
+        throw err;
+      });
+    }
+
+    var runners = [];
+    var count = Math.min(limit, items.length);
+    for (var i = 0; i < count; i++) {
+      runners.push(runNext());
+    }
+    return Promise.all(runners);
   }
 
   function startFileUpload(file, targetFolderId) {
@@ -323,17 +420,157 @@
     var pctEl = document.getElementById('pct_' + taskId);
     var fillEl = document.getElementById('fill_' + taskId);
 
-    var xhr = null;
     // Hủy có thể xảy ra trong lúc còn đang chờ /api/files/upload-url, khi đó
-    // xhr vẫn null nên phải nhớ trạng thái để không gửi file sau đó.
+    // chưa có xhr nào nên phải nhớ trạng thái để không gửi file sau đó.
     var cancelled = false;
+    var pendingXhrs = [];
+    var fileId = null;
+    var partEtags = [];
+    // Đặt ngay trước bước hoàn tất: sau mốc này dữ liệu đã nằm trên R2, hủy bỏ
+    // bản ghi sẽ làm mất file thay vì dọn rác.
+    var transferDone = false;
+
+    // Từ mốc này việc hủy không còn ngăn được gì nữa — chỉ khiến UI báo "Đã hủy"
+    // trong khi file vẫn hoàn tất trên server.
+    function markTransferDone(label) {
+      transferDone = true;
+      if (cancelBtn) cancelBtn.style.display = 'none';
+      if (speedEl) speedEl.textContent = label;
+    }
+
+    function trackXhr(xhr) {
+      pendingXhrs.push(xhr);
+      // Nút hủy có thể được bấm giữa lúc xhr đang được dựng.
+      if (cancelled) xhr.abort();
+    }
+
+    function untrackXhr(xhr) {
+      var idx = pendingXhrs.indexOf(xhr);
+      if (idx !== -1) pendingXhrs.splice(idx, 1);
+    }
+
+    function abortPendingXhrs() {
+      pendingXhrs.splice(0).forEach(function (xhr) {
+        try {
+          xhr.abort();
+        } catch (_e) {
+          /* xhr đã kết thúc */
+        }
+      });
+    }
+
+    function reportProgress(loaded) {
+      var task = activeUploadTasks[taskId];
+      if (!task) return;
+
+      var currTime = Date.now();
+      var timeDiff = (currTime - task.lastTime) / 1000;
+      if (timeDiff >= 0.3) {
+        // Một part gửi lại sẽ kéo tổng đã tải xuống, cho ra tốc độ âm. Kẹp về 0
+        // thay vì hiện "-12 MB/s".
+        task.speed = Math.max(0, (loaded - task.lastLoaded) / timeDiff);
+        task.lastLoaded = loaded;
+        task.lastTime = currTime;
+      }
+
+      var pct = file.size > 0 ? Math.round((loaded / file.size) * 100) : 100;
+      if (fillEl) fillEl.style.width = pct + '%';
+      if (pctEl) pctEl.textContent = pct + '%';
+      if (speedEl) {
+        speedEl.textContent =
+          formatBytes(task.speed) + '/s • ' + formatBytes(loaded) + ' / ' + formatBytes(file.size);
+      }
+
+      updateGlobalUploadSummary();
+    }
+
+    function sendPartWithRetry(url, blob, attemptsLeft, handlers) {
+      return sendBlob(url, blob, null, handlers).catch(function (err) {
+        var retryable = !err.status || err.status >= 500;
+        if (err.message === CANCELLED_MESSAGE || attemptsLeft <= 1 || !retryable) throw err;
+
+        // Lần gửi lại bắt đầu từ 0 byte, phải trừ phần đã cộng vào tổng.
+        if (handlers.onRetry) handlers.onRetry();
+        return new Promise(function (resolve) {
+          setTimeout(resolve, 1000);
+        }).then(function () {
+          return sendPartWithRetry(url, blob, attemptsLeft - 1, handlers);
+        });
+      });
+    }
+
+    async function uploadInParts(meta) {
+      var partSize = meta.partSize;
+      var partCount = meta.partCount;
+      var loadedByPart = [];
+      var totalLoaded = 0;
+      for (var i = 0; i < partCount; i++) loadedByPart.push(0);
+
+      // Lô tính theo dung lượng chứ không theo số part: URL hết hạn sau một giờ,
+      // nên lô phải đủ nhỏ để gửi xong trước đó kể cả trên đường truyền chậm.
+      var batchSize = Math.floor(PART_URL_BATCH_BYTES / partSize);
+      batchSize = Math.max(1, Math.min(PART_URL_BATCH_LIMIT, batchSize));
+
+      for (var start = 0; start < partCount; start += batchSize) {
+        if (cancelled) throw new Error(CANCELLED_MESSAGE);
+
+        var end = Math.min(start + batchSize, partCount);
+        var partNumbers = [];
+        for (var n = start; n < end; n++) partNumbers.push(n + 1);
+
+        // Xin URL ngay trước khi dùng: file lớn có thể mất hàng giờ, xin hết cả
+        // 10.000 URL từ đầu thì lô cuối chắc chắn hết hạn trước khi tới lượt.
+        var batch = await apiCall('/api/files/' + fileId + '/multipart/part-urls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ partNumbers: partNumbers }),
+        });
+
+        await runWithConcurrency(batch.partUrls, PART_CONCURRENCY, function (part) {
+          if (cancelled) return Promise.reject(new Error(CANCELLED_MESSAGE));
+
+          var index = part.partNumber - 1;
+          var from = index * partSize;
+          // slice() không truyền contentType nên blob có type rỗng, khớp với
+          // URL part được ký không kèm content-type.
+          var blob = file.slice(from, Math.min(from + partSize, file.size));
+
+          return sendPartWithRetry(part.url, blob, PART_ATTEMPTS, {
+            onXhr: trackXhr,
+            onXhrDone: untrackXhr,
+            onProgress: function (loaded) {
+              totalLoaded += loaded - loadedByPart[index];
+              loadedByPart[index] = loaded;
+              reportProgress(totalLoaded);
+            },
+            onRetry: function () {
+              totalLoaded -= loadedByPart[index];
+              loadedByPart[index] = 0;
+            },
+          }).then(function (xhr) {
+            var etag = xhr.getResponseHeader('ETag');
+            if (!etag) {
+              throw new Error(
+                'Không đọc được ETag của part ' + part.partNumber + ' (bucket thiếu ExposeHeaders: ETag)'
+              );
+            }
+            partEtags[index] = { partNumber: part.partNumber, etag: etag };
+          });
+        });
+      }
+
+      // Mảng gán theo chỉ số nên một khe bị bỏ sót sẽ thành `null` sau
+      // JSON.stringify và R2 từ chối cả lần ghép. Bắt lỗi ở đây để thông báo
+      // chỉ đúng phần thiếu.
+      for (var p = 0; p < partCount; p++) {
+        if (!partEtags[p]) throw new Error('Thiếu ETag của phần ' + (p + 1));
+      }
+    }
 
     if (cancelBtn) {
       cancelBtn.addEventListener('click', function () {
         cancelled = true;
-        if (xhr) {
-          xhr.abort();
-        }
+        abortPendingXhrs();
         delete activeUploadTasks[taskId];
         if (speedEl) {
           speedEl.textContent = 'Đã hủy';
@@ -359,76 +596,48 @@
       }),
     })
       .then(function (data) {
-        return new Promise(function (resolve, reject) {
-          if (cancelled) {
-            reject(new Error('Đã hủy tải lên'));
-            return;
-          }
+        // Gán trước khi kiểm tra hủy: bản ghi pending đã được tạo trên server
+        // rồi, không có fileId thì nhánh catch không dọn được nó.
+        fileId = data.fileId;
+        if (cancelled) throw new Error(CANCELLED_MESSAGE);
 
-          xhr = new XMLHttpRequest();
-          var now = Date.now();
+        var now = Date.now();
+        activeUploadTasks[taskId] = {
+          file: file,
+          startTime: now,
+          lastTime: now,
+          lastLoaded: 0,
+          speed: 0,
+        };
 
-          activeUploadTasks[taskId] = {
-            xhr: xhr,
-            file: file,
-            startTime: now,
-            lastTime: now,
-            lastLoaded: 0,
-            speed: 0,
-          };
-
-          xhr.open('PUT', data.uploadUrl, true);
-          xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-
-          xhr.upload.addEventListener('progress', function (e) {
-            if (e.lengthComputable && activeUploadTasks[taskId]) {
-              var currTime = Date.now();
-              var task = activeUploadTasks[taskId];
-              var timeDiff = (currTime - task.lastTime) / 1000;
-
-              if (timeDiff >= 0.3) {
-                var bytesDiff = e.loaded - task.lastLoaded;
-                task.speed = bytesDiff / timeDiff;
-                task.lastLoaded = e.loaded;
-                task.lastTime = currTime;
-              }
-
-              var pct = Math.round((e.loaded / e.total) * 100);
-              if (fillEl) fillEl.style.width = pct + '%';
-              if (pctEl) pctEl.textContent = pct + '%';
-              if (speedEl) {
-                speedEl.textContent = formatBytes(task.speed) + '/s • ' + formatBytes(e.loaded) + ' / ' + formatBytes(e.total);
-              }
-
-              updateGlobalUploadSummary();
-            }
+        // Server quyết định đường đi: file lớn phải chia part vì R2 từ chối
+        // single PUT quá 4.995 GiB.
+        if (data.isMultipart) {
+          return uploadInParts(data).then(function () {
+            markTransferDone('Đang ghép các phần...');
+            return postWithRetry(
+              '/api/files/' + fileId + '/multipart/complete',
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ parts: partEtags }),
+              },
+              3
+            );
           });
+        }
 
-          xhr.onload = function () {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve(data.fileId);
-            } else {
-              reject(new Error('Upload thất bại (HTTP ' + xhr.status + ')'));
-            }
-          };
-
-          xhr.onerror = function () {
-            reject(new Error('Lỗi kết nối mạng khi tải file'));
-          };
-
-          xhr.onabort = function () {
-            reject(new Error('Đã hủy tải lên'));
-          };
-
-          xhr.send(file);
+        return sendBlob(data.uploadUrl, file, file.type || 'application/octet-stream', {
+          onXhr: trackXhr,
+          onXhrDone: untrackXhr,
+          onProgress: reportProgress,
+        }).then(function () {
+          // File đã nằm trên R2 nhưng chưa được đánh dấu completed. Nếu bước này
+          // thất bại vì lỗi tạm thời, file kẹt ở pending và sẽ bị job dọn rác xóa
+          // sau 24h, nên thử lại vài lần trước khi báo lỗi.
+          markTransferDone('Đang hoàn tất...');
+          return postWithRetry('/api/files/' + fileId + '/complete', { method: 'POST' }, 3);
         });
-      })
-      .then(function (fileId) {
-        // File đã nằm trên R2 nhưng chưa được đánh dấu completed. Nếu bước này
-        // thất bại vì lỗi tạm thời, file kẹt ở pending và sẽ bị job dọn rác xóa
-        // sau 24h, nên thử lại vài lần trước khi báo lỗi.
-        if (speedEl) speedEl.textContent = 'Đang hoàn tất...';
-        return completeUploadWithRetry(fileId, 3);
       })
       .then(function () {
         delete activeUploadTasks[taskId];
@@ -452,7 +661,16 @@
       })
       .catch(function (err) {
         delete activeUploadTasks[taskId];
-        if (err.message !== 'Đã hủy tải lên') {
+        abortPendingXhrs();
+
+        // Dọn bản ghi pending và các part dở dang trên R2. Không làm khi dữ liệu
+        // đã truyền xong: lúc đó chỉ còn bước đánh dấu hoàn tất, xóa đi là mất
+        // file thật. Không chờ kết quả — job dọn rác vẫn quét lại sau 24h.
+        if (fileId && !transferDone) {
+          apiCall('/api/files/' + fileId + '/abort-upload', { method: 'POST' }).catch(function () {});
+        }
+
+        if (err.message !== CANCELLED_MESSAGE) {
           if (speedEl) {
             speedEl.textContent = err.message || 'Thất bại';
             speedEl.style.color = '#ef4444';
@@ -894,7 +1112,13 @@
         try {
           btnCleanAllOrphansModal.disabled = true;
           var res = await apiCall('/api/files/storage/clean-orphans', { method: 'POST' });
-          showToast('Đã xoá ' + res.deletedOrphanR2Objects + ' file mồ côi (' + res.freedFormatted + ')', 'success');
+          var summary = 'Đã xoá ' + res.deletedOrphanR2Objects + ' file mồ côi (' + res.freedFormatted + ')';
+          // Multipart treo không nằm trong danh sách object nên không hiện ở
+          // bảng file mồ côi, nhưng vẫn tốn dung lượng — phải báo riêng.
+          if (res.abortedStaleMultipartUploads > 0) {
+            summary += ', huỷ ' + res.abortedStaleMultipartUploads + ' phiên upload dở dang';
+          }
+          showToast(summary, 'success');
           await loadOrphanFiles();
           await loadStorageQuota();
         } catch (err) {

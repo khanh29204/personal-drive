@@ -7,14 +7,56 @@ use serde::{Deserialize, Serialize};
 use crate::errors::AppError;
 use crate::models::file::{File, FileStatus};
 use crate::services::folder_service::FolderService;
-use crate::services::r2_service::{build_object_key, R2Service};
+use crate::services::r2_service::{
+    build_object_key, calculate_part_count, calculate_part_size, needs_multipart, R2Service,
+    MAX_OBJECT_BYTES,
+};
+
+/// Số URL part tối đa cấp trong một lần gọi. Presign là thao tác cục bộ (chỉ
+/// ký HMAC, không gọi mạng) nhưng 10.000 URL trong một response là vài MB JSON,
+/// nên client xin theo lô.
+pub const MAX_PART_URLS_PER_REQUEST: i64 = 100;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UploadUrlResult {
     #[serde(rename = "fileId")]
     pub file_id: String,
-    #[serde(rename = "uploadUrl")]
-    pub upload_url: String,
+    /// Chỉ có với upload single PUT.
+    #[serde(rename = "uploadUrl", skip_serializing_if = "Option::is_none")]
+    pub upload_url: Option<String>,
+    /// `true` khi client phải đi đường multipart. Client cũ không đọc trường
+    /// này nhưng cũng không gặp nó: file nhỏ vẫn trả `uploadUrl` như trước.
+    #[serde(rename = "isMultipart")]
+    pub is_multipart: bool,
+    #[serde(rename = "partSize", skip_serializing_if = "Option::is_none")]
+    pub part_size: Option<i64>,
+    #[serde(rename = "partCount", skip_serializing_if = "Option::is_none")]
+    pub part_count: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PartUrl {
+    #[serde(rename = "partNumber")]
+    pub part_number: i32,
+    pub url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PartUrlsResult {
+    #[serde(rename = "partUrls")]
+    pub part_urls: Vec<PartUrl>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CompletedPartBody {
+    #[serde(rename = "partNumber")]
+    pub part_number: i32,
+    pub etag: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CompleteMultipartBody {
+    pub parts: Vec<CompletedPartBody>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,6 +76,7 @@ pub struct StorageQuotaResult {
 pub struct CleanOrphanResult {
     pub deleted_orphan_r2_objects: usize,
     pub deleted_stale_pending_records: u64,
+    pub aborted_stale_multipart_uploads: usize,
     pub freed_bytes: i64,
     pub freed_formatted: String,
 }
@@ -112,12 +155,32 @@ impl FileService {
         is_public: bool,
         owner_id: String,
     ) -> Result<UploadUrlResult, AppError> {
+        if size > MAX_OBJECT_BYTES {
+            return Err(AppError::BadRequest(format!(
+                "File vượt giới hạn {} của R2",
+                crate::utils::file_display::format_bytes(MAX_OBJECT_BYTES)
+            )));
+        }
+
         if let Some(fid) = folder_id {
             FolderService::assert_folder_ownership(db, &fid, &owner_id).await?;
         }
 
         let key = build_object_key(&owner_id, &name);
         let now = chrono::Utc::now();
+        let use_multipart = needs_multipart(size);
+
+        // Mở multipart trước khi ghi DB: nếu R2 từ chối thì chưa có bản ghi
+        // `pending` nào phải dọn.
+        let upload_id = if use_multipart {
+            Some(
+                r2.create_multipart_upload(&key, &mime_type)
+                    .await
+                    .map_err(AppError::Internal)?,
+            )
+        } else {
+            None
+        };
 
         let new_file = File {
             id: None,
@@ -130,6 +193,7 @@ impl FileService {
             owner_id,
             is_public,
             status: FileStatus::Pending,
+            multipart_upload_id: upload_id.clone(),
             views: 0,
             downloads: 0,
             created_at: now,
@@ -137,15 +201,35 @@ impl FileService {
         };
 
         let collection = db.collection::<File>("files");
-        let res = collection
-            .insert_one(&new_file)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let insert_res = collection.insert_one(&new_file).await;
+
+        // Ghi DB hỏng thì multipart vừa mở sẽ không ai đóng — abort ngay thay
+        // vì đợi job dọn rác 24h sau.
+        let res = match insert_res {
+            Ok(res) => res,
+            Err(e) => {
+                if let Some(uid) = &upload_id {
+                    let _ = r2.abort_multipart_upload(&key, uid).await;
+                }
+                return Err(AppError::Internal(e.to_string()));
+            }
+        };
 
         let inserted_id = res
             .inserted_id
             .as_object_id()
             .ok_or_else(|| AppError::Internal("Không lấy được ObjectId file".to_string()))?;
+
+        if use_multipart {
+            let part_size = calculate_part_size(size);
+            return Ok(UploadUrlResult {
+                file_id: inserted_id.to_hex(),
+                upload_url: None,
+                is_multipart: true,
+                part_size: Some(part_size),
+                part_count: Some(calculate_part_count(size, part_size)),
+            });
+        }
 
         let upload_url = r2
             .create_upload_url(&key, &mime_type)
@@ -154,9 +238,146 @@ impl FileService {
 
         Ok(UploadUrlResult {
             file_id: inserted_id.to_hex(),
-            upload_url,
+            upload_url: Some(upload_url),
+            is_multipart: false,
+            part_size: None,
+            part_count: None,
         })
     }
+
+    /// Cấp presigned URL cho một lô part. Client gọi ngay trước khi gửi lô đó
+    /// nên URL không kịp hết hạn dù cả file mất hàng giờ để lên.
+    pub async fn create_part_urls(
+        db: &Database,
+        r2: &R2Service,
+        file_id: &ObjectId,
+        owner_id: &str,
+        part_numbers: Vec<i32>,
+    ) -> Result<PartUrlsResult, AppError> {
+        if part_numbers.is_empty() {
+            return Err(AppError::bad_request("Danh sách partNumbers rỗng"));
+        }
+        if part_numbers.len() as i64 > MAX_PART_URLS_PER_REQUEST {
+            return Err(AppError::BadRequest(format!(
+                "Mỗi lần chỉ xin được tối đa {} URL part",
+                MAX_PART_URLS_PER_REQUEST
+            )));
+        }
+
+        let file = Self::get_owned_file(db, file_id, owner_id).await?;
+        let upload_id = Self::require_multipart_id(&file)?;
+
+        let mut part_urls = Vec::with_capacity(part_numbers.len());
+        for part_number in part_numbers {
+            // R2 đánh số part từ 1 tới 10.000; số ngoài khoảng này bị từ chối ở
+            // tận lúc gửi part, khi client đã tốn công cắt file.
+            if !(1..=crate::services::r2_service::MAX_PARTS as i32).contains(&part_number) {
+                return Err(AppError::BadRequest(format!(
+                    "partNumber {} không hợp lệ",
+                    part_number
+                )));
+            }
+
+            let url = r2
+                .create_part_upload_url(&file.key, upload_id, part_number)
+                .await
+                .map_err(AppError::Internal)?;
+            part_urls.push(PartUrl { part_number, url });
+        }
+
+        Ok(PartUrlsResult { part_urls })
+    }
+
+    /// Ghép các part lại rồi đánh dấu file hoàn tất. Gộp hai bước vào một
+    /// endpoint để không có khoảng trống mà object đã tồn tại trên R2 nhưng bản
+    /// ghi vẫn `pending`.
+    pub async fn complete_multipart_upload(
+        db: &Database,
+        r2: &R2Service,
+        cache: &Cache<String, File>,
+        file_id: &ObjectId,
+        owner_id: &str,
+        mut parts: Vec<CompletedPartBody>,
+    ) -> Result<File, AppError> {
+        let file = Self::get_owned_file(db, file_id, owner_id).await?;
+
+        if file.status == FileStatus::Completed {
+            return Ok(file);
+        }
+
+        // Client gọi lại endpoint này khi mạng đứt giữa chừng. Lần trước có thể
+        // đã ghép xong trên R2 mà response không về được, khi đó `uploadId` đã
+        // bị xóa — đi thẳng tới bước đánh dấu hoàn tất thay vì báo lỗi.
+        if let Some(upload_id) = file.multipart_upload_id.as_deref() {
+            if parts.is_empty() {
+                return Err(AppError::bad_request("Danh sách parts rỗng"));
+            }
+
+            parts.sort_by_key(|p| p.part_number);
+            let pairs: Vec<(i32, String)> =
+                parts.into_iter().map(|p| (p.part_number, p.etag)).collect();
+
+            if let Err(e) = r2.complete_multipart_upload(&file.key, upload_id, &pairs).await {
+                // Lần gọi trước đã ghép xong thì `uploadId` không còn tồn tại và
+                // R2 trả `NoSuchUpload`. Object có mặt trên bucket là bằng chứng
+                // đủ để coi như thành công; nếu không có thì đây là lỗi thật.
+                let already_done = matches!(r2.get_object_meta(&file.key).await, Ok((true, _)));
+                if !already_done {
+                    return Err(AppError::Internal(e));
+                }
+            }
+
+            // uploadId đã dùng xong; giữ lại sẽ khiến job dọn rác tưởng còn upload dở.
+            let collection = db.collection::<File>("files");
+            collection
+                .update_one(
+                    doc! { "_id": file_id },
+                    doc! { "$unset": { "multipartUploadId": "" } },
+                )
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+        }
+
+        Self::complete_upload(db, r2, cache, file_id, owner_id).await
+    }
+
+    /// Hủy một upload đang dở: đóng multipart (nếu có) và xóa bản ghi `pending`.
+    /// Dùng chung cho cả hai đường upload nên client chỉ cần một lời gọi khi
+    /// người dùng bấm Hủy hoặc khi có lỗi giữa chừng.
+    pub async fn abort_upload(
+        db: &Database,
+        r2: &R2Service,
+        cache: &Cache<String, File>,
+        file_id: &ObjectId,
+        owner_id: &str,
+    ) -> Result<(), AppError> {
+        let file = Self::get_owned_file(db, file_id, owner_id).await?;
+
+        if let Some(upload_id) = &file.multipart_upload_id {
+            // Lỗi abort không nên chặn việc xóa bản ghi: job dọn rác sẽ quét lại
+            // các multipart treo.
+            let _ = r2.abort_multipart_upload(&file.key, upload_id).await;
+        }
+
+        // Chỉ xóa bản ghi còn `pending`. File đã hoàn tất mà bị xóa vì một lời
+        // gọi abort đến muộn thì mất dữ liệu thật.
+        let collection = db.collection::<File>("files");
+        collection
+            .delete_one(doc! { "_id": file_id, "status": "pending" })
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        cache.invalidate(&file_id.to_hex()).await;
+
+        Ok(())
+    }
+
+    fn require_multipart_id(file: &File) -> Result<&str, AppError> {
+        file.multipart_upload_id.as_deref().ok_or_else(|| {
+            AppError::bad_request("File này không dùng multipart upload")
+        })
+    }
+
 
     pub async fn get_owned_file(
         db: &Database,
@@ -331,6 +552,7 @@ impl FileService {
             owner_id,
             is_public: false,
             status: FileStatus::Completed,
+            multipart_upload_id: None,
             views: 0,
             downloads: 0,
             created_at: now,
@@ -490,6 +712,11 @@ impl FileService {
 
         while let Some(result) = stale_cursor.next().await {
             if let Ok(stale_file) = result {
+                // Bản ghi pending dở dang có thể là multipart chưa complete.
+                // Xóa object không đụng tới các part đã upload, phải abort riêng.
+                if let Some(upload_id) = &stale_file.multipart_upload_id {
+                    let _ = r2.abort_multipart_upload(&stale_file.key, upload_id).await;
+                }
                 let _ = r2.delete_object(&stale_file.key).await;
             }
         }
@@ -499,6 +726,27 @@ impl FileService {
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
         let deleted_stale_count = delete_res.deleted_count;
+
+        // Multipart bị bỏ giữa chừng (đóng tab, mất mạng) không để lại object
+        // nào trong list_objects nhưng các part vẫn bị tính dung lượng, nên phải
+        // quét thẳng từ phía R2 chứ không dựa vào bản ghi DB.
+        let mut aborted_stale_multipart_uploads = 0;
+        match r2.list_multipart_uploads().await {
+            Ok(uploads) => {
+                for (key, upload_id, initiated) in uploads {
+                    // Không rõ thời điểm khởi tạo thì để yên: có thể là upload
+                    // đang chạy, abort nhầm sẽ làm hỏng nó.
+                    let Some(started_at) = initiated else { continue };
+                    if started_at >= stale_cutoff {
+                        continue;
+                    }
+                    if r2.abort_multipart_upload(&key, &upload_id).await.is_ok() {
+                        aborted_stale_multipart_uploads += 1;
+                    }
+                }
+            }
+            Err(e) => eprintln!("⚠️ Không liệt kê được multipart upload treo: {}", e),
+        }
 
         let r2_objects = r2.list_all_objects().await.map_err(AppError::Internal)?;
         let mut deleted_orphan_r2_objects = 0;
@@ -516,6 +764,7 @@ impl FileService {
         Ok(CleanOrphanResult {
             deleted_orphan_r2_objects,
             deleted_stale_pending_records: deleted_stale_count,
+            aborted_stale_multipart_uploads,
             freed_bytes,
             freed_formatted: crate::utils::file_display::format_bytes(freed_bytes),
         })

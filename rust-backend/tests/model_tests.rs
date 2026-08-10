@@ -35,6 +35,7 @@ fn test_file_serialization() {
         owner_id: "user_test_1".to_string(),
         is_public: false,
         status: FileStatus::Completed,
+        multipart_upload_id: None,
         views: 5,
         downloads: 2,
         created_at: now,
@@ -45,4 +46,7 @@ fn test_file_serialization() {
     assert_eq!(doc.get_str("name").unwrap(), "test.pdf");
     assert_eq!(doc.get_i64("size").unwrap(), 1024);
     assert_eq!(doc.get_str("status").unwrap(), "completed");
+    // File thường không được mang theo trường multipart: bản ghi cũ trong DB
+    // không có nó, và job dọn rác coi trường này là dấu hiệu upload còn dở.
+    assert!(!doc.contains_key("multipartUploadId"));
 }

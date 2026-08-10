@@ -67,6 +67,15 @@ pub fn create_router(state: AppState) -> Router {
             get(file_handler::list_orphan_files).delete(file_handler::delete_specific_orphans),
         )
         .route("/api/files/{id}/complete", post(file_handler::complete_upload))
+        .route(
+            "/api/files/{id}/multipart/part-urls",
+            post(file_handler::create_part_urls),
+        )
+        .route(
+            "/api/files/{id}/multipart/complete",
+            post(file_handler::complete_multipart_upload),
+        )
+        .route("/api/files/{id}/abort-upload", post(file_handler::abort_upload))
         .route("/api/files/{id}/download-url", get(file_handler::get_download_url))
         .route(
             "/api/files/{id}",

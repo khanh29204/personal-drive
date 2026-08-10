@@ -27,6 +27,12 @@ pub struct File {
     #[serde(rename = "isPublic", default)]
     pub is_public: bool,
     pub status: FileStatus,
+    /// `uploadId` của multipart upload đang dở. Server tự lưu thay vì nhận từ
+    /// client để client không ghép part vào một upload của người khác. `None`
+    /// với file upload bằng PUT thường và với mọi bản ghi tạo trước khi có
+    /// multipart, nên phải `default`.
+    #[serde(rename = "multipartUploadId", default, skip_serializing_if = "Option::is_none")]
+    pub multipart_upload_id: Option<String>,
     #[serde(default)]
     pub views: i64,
     #[serde(default)]
