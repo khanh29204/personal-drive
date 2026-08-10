@@ -1,5 +1,9 @@
 FROM lukemathwalker/cargo-chef:latest-rust-alpine AS chef
-RUN apk add --no-cache musl-dev protobuf-dev make gcc g++ openssl-dev openssl-libs-static pkgconfig
+# Bỏ openssl-dev + openssl-libs-static: reqwest đã chuyển sang rustls nên không
+# còn crate nào trong cây phụ thuộc link OpenSSL (`cargo tree -i openssl-sys`
+# không ra kết quả). Phần còn lại giữ nguyên — aws-lc-sys và ring dựng được
+# bằng gcc/g++ có sẵn, không cần cmake.
+RUN apk add --no-cache musl-dev protobuf-dev make gcc g++ pkgconfig
 
 WORKDIR /app
 
@@ -34,7 +38,10 @@ COPY public ./public
 FROM alpine:3.20 AS runner
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata
+# Không cài tzdata: toàn bộ mốc thời gian trong code dùng chrono::Utc, không có
+# chỗ nào đổi sang timezone địa phương. Nếu sau này cần hiển thị giờ local thì
+# phải thêm lại, nếu không chrono-tz sẽ không tìm thấy database.
+RUN apk add --no-cache ca-certificates
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 COPY --from=builder /app/rust-backend /app/rust-backend

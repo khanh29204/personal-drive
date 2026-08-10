@@ -18,7 +18,11 @@ aws-config = "1.10"
 aws-sdk-s3 = "1.141"
 aws-credential-types = "1.3"
 jsonwebtoken = "9.3"
-reqwest = { version = "0.12", features = ["json", "cookies"] }
+# default-features = false để bỏ native-tls: AWS SDK đã dùng rustls, giữ thêm
+# native-tls nghĩa là hai TLS stack trong cùng một binary và kéo theo OpenSSL —
+# builder phải cài openssl-dev + openssl-libs-static chỉ vì nó.
+# native-roots dùng chung CA store hệ thống với AWS SDK thay vì bundle riêng.
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "charset", "http2", "rustls-tls-native-roots"] }
 tonic = "0.12"
 prost = "0.13"
 minijinja = { version = "2.23", features = ["loader", "json"] }
@@ -38,11 +42,14 @@ mime_guess = "2.0"
 tonic-build = { version = "0.12", features = ["transport"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", features = ["json", "cookies"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "charset", "http2", "rustls-tls-native-roots"] }
 
 [profile.release]
 opt-level = 3
-codegen-units = 16
-lto = "thin"
+# codegen-units = 1 + lto = "fat" cho binary nhỏ hơn và nhanh hơn, đổi lại build
+# lâu hơn rõ rệt. Với image chạy 24/7 thì đánh đổi này có lợi; nếu CI trở thành
+# nút cổ chai, hạ về codegen-units = 16 và lto = "thin".
+codegen-units = 1
+lto = "fat"
 panic = "abort"
 strip = true
