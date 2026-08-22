@@ -17,6 +17,12 @@ use crate::services::r2_service::{
 /// nên client xin theo lô.
 pub const MAX_PART_URLS_PER_REQUEST: i64 = 100;
 
+/// Bản ghi `pending` hoặc phiên multipart vượt quá ngưỡng này thì coi là rác:
+/// upload thật không thể im lặng quá 24h mà client không abort hay complete.
+/// `list_orphan_files` và `clean_orphan_files` phải dùng chung một ngưỡng để
+/// danh sách liệt kê luôn khớp với những gì nút dọn dẹp sẽ xóa.
+pub const STALE_PENDING_CUTOFF_HOURS: i64 = 24;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UploadUrlResult {
     #[serde(rename = "fileId")]
@@ -90,17 +96,153 @@ pub struct OrphanFileInfo {
     pub size_formatted: String,
 }
 
+/// Bản ghi `pending` đã quá hạn — upload chết giữa chừng. Object trên R2 có thể
+/// tồn tại hoặc không; thứ chắc chắn rác là chính bản ghi này.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StalePendingInfo {
+    pub file_id: String,
+    pub name: String,
+    pub key: String,
+    pub size: i64,
+    pub size_formatted: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub has_multipart: bool,
+}
+
+/// Phiên multipart treo trên R2 không còn bản ghi DB nào nhận (bản ghi nhận nó
+/// đã bị xóa hoặc chưa từng tồn tại). Part dở dang vẫn bị tính dung lượng lưu
+/// trữ nhưng không hiện trong danh sách object.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DanglingMultipartInfo {
+    pub key: String,
+    pub upload_id: String,
+    pub initiated: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Đủ ba loại rác mà `clean_orphan_files` dọn. Bản cũ chỉ trả loại đầu nên hai
+/// loại sau — trong đó có các upload thất bại chiếm hàng GB — không bao giờ
+/// xuất hiện trong modal.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanScanResult {
+    pub orphan_objects: Vec<OrphanFileInfo>,
+    pub stale_pending_files: Vec<StalePendingInfo>,
+    pub dangling_multipart: Vec<DanglingMultipartInfo>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteOrphansResult {
     pub deleted_count: usize,
+    pub deleted_stale_pending: usize,
+    pub aborted_multipart: usize,
     pub freed_bytes: i64,
     pub freed_formatted: String,
 }
 
+/// Tham chiếu một phiên multipart cần abort, nhận từ client.
+#[derive(Debug, Deserialize)]
+pub struct MultipartRef {
+    pub key: String,
+    #[serde(rename = "uploadId")]
+    pub upload_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DeleteOrphansBody {
+    #[serde(default)]
     pub keys: Vec<String>,
+    #[serde(default, rename = "fileIds")]
+    pub file_ids: Vec<String>,
+    #[serde(default, rename = "multipartRefs")]
+    pub multipart_refs: Vec<MultipartRef>,
+}
+
+/// Phân loại rác thành ba loại khớp đúng những gì `clean_orphan_files` dọn:
+///
+/// - `orphan_objects`: object trên R2 không bản ghi DB nào biết tới;
+/// - `stale_pending_files`: bản ghi `pending` quá `cutoff` — upload chết giữa
+///   chừng, object tương ứng có thể còn hoặc mất;
+/// - `dangling_multipart`: phiên multipart quá `cutoff` mà không bản ghi nào
+///   nhận qua `multipartUploadId` (phiên đã có bản ghi nhận được loại thứ hai
+///   phủ rồi, không liệt kê trùng).
+///
+/// Hàm thuần để unit test không cần nối R2/MongoDB.
+pub fn classify_orphans(
+    files: &[File],
+    r2_objects: &[(String, i64)],
+    multipart_uploads: &[(String, String, Option<chrono::DateTime<chrono::Utc>>)],
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> OrphanScanResult {
+    use std::collections::HashSet;
+
+    // Mọi bản ghi đều được tính là "chủ" hợp lệ của key, kể cả `pending`:
+    // object của upload đang chạy không phải rác.
+    let valid_keys: HashSet<&str> = files.iter().map(|f| f.key.as_str()).collect();
+    let claimed_upload_ids: HashSet<&str> = files
+        .iter()
+        .filter_map(|f| f.multipart_upload_id.as_deref())
+        .collect();
+
+    let orphan_objects = r2_objects
+        .iter()
+        .filter(|(key, _)| !valid_keys.contains(key.as_str()))
+        .map(|(key, size)| {
+            let name = key
+                .rsplit_once('/')
+                .map(|(_, name)| name)
+                .unwrap_or(key)
+                .to_string();
+            OrphanFileInfo {
+                name,
+                size_formatted: crate::utils::file_display::format_bytes(*size),
+                key: key.clone(),
+                size: *size,
+            }
+        })
+        .collect();
+
+    let stale_pending_files = files
+        .iter()
+        .filter(|f| f.status == FileStatus::Pending && f.created_at < cutoff)
+        .filter_map(|f| {
+            // Bản ghi đọc từ cursor luôn có `_id`; nếu không thì cũng không có
+            // cách nào xóa đích danh nó nên bỏ qua.
+            let id = f.id?;
+            Some(StalePendingInfo {
+                file_id: id.to_hex(),
+                name: f.name.clone(),
+                key: f.key.clone(),
+                size: f.size,
+                size_formatted: crate::utils::file_display::format_bytes(f.size),
+                created_at: f.created_at,
+                has_multipart: f.multipart_upload_id.is_some(),
+            })
+        })
+        .collect();
+
+    let dangling_multipart = multipart_uploads
+        .iter()
+        .filter(|(_, upload_id, initiated)| {
+            // Không rõ thời điểm khởi tạo thì để yên, đúng như
+            // `clean_orphan_files`: abort nhầm một upload đang chạy còn tệ hơn
+            // bỏ sót một phiên treo.
+            initiated.is_some_and(|t| t < cutoff) && !claimed_upload_ids.contains(upload_id.as_str())
+        })
+        .map(|(key, upload_id, initiated)| DanglingMultipartInfo {
+            key: key.clone(),
+            upload_id: upload_id.clone(),
+            initiated: *initiated,
+        })
+        .collect();
+
+    OrphanScanResult {
+        orphan_objects,
+        stale_pending_files,
+        dangling_multipart,
+    }
 }
 
 pub struct FileService;
@@ -699,7 +841,8 @@ impl FileService {
             }
         }
 
-        let stale_cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
+        let stale_cutoff = chrono::Utc::now()
+            - chrono::Duration::hours(STALE_PENDING_CUTOFF_HOURS);
         let stale_pending_filter = doc! {
             "status": "pending",
             "createdAt": { "$lt": stale_cutoff }
@@ -770,10 +913,12 @@ impl FileService {
         })
     }
 
+    /// Quét đủ ba loại rác mà `clean_orphan_files` sẽ dọn, để modal hiện đúng
+    /// những gì nút "Xoá tất cả" đụng tới.
     pub async fn list_orphan_files(
         db: &Database,
         r2: &R2Service,
-    ) -> Result<Vec<OrphanFileInfo>, AppError> {
+    ) -> Result<OrphanScanResult, AppError> {
         let collection = db.collection::<File>("files");
 
         let mut cursor = collection
@@ -781,42 +926,40 @@ impl FileService {
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        use std::collections::HashSet;
         use futures::StreamExt;
-        let mut valid_keys = HashSet::new();
-
+        let mut files = Vec::new();
         while let Some(result) = cursor.next().await {
             if let Ok(file) = result {
-                valid_keys.insert(file.key);
+                files.push(file);
             }
         }
 
         let r2_objects = r2.list_all_objects().await.map_err(AppError::Internal)?;
-        let mut orphans = Vec::new();
 
-        for (key, size) in r2_objects {
-            if !valid_keys.contains(&key) {
-                let name = key
-                    .rsplit_once('/')
-                    .map(|(_, name)| name)
-                    .unwrap_or(&key)
-                    .to_string();
-
-                orphans.push(OrphanFileInfo {
-                    name,
-                    size_formatted: crate::utils::file_display::format_bytes(size),
-                    key,
-                    size,
-                });
+        // Liệt kê multipart hỏng thì vẫn trả hai loại còn lại, khớp cách
+        // `clean_orphan_files` xử lý cùng lỗi này (ghi log và bỏ qua).
+        let multipart_uploads = match r2.list_multipart_uploads().await {
+            Ok(uploads) => uploads,
+            Err(e) => {
+                eprintln!("⚠️ Không liệt kê được multipart upload treo: {}", e);
+                Vec::new()
             }
-        }
+        };
 
-        Ok(orphans)
+        let stale_cutoff = chrono::Utc::now()
+            - chrono::Duration::hours(STALE_PENDING_CUTOFF_HOURS);
+
+        Ok(classify_orphans(&files, &r2_objects, &multipart_uploads, stale_cutoff))
     }
 
+    /// Xóa rác theo lựa chọn của người dùng, phủ cả ba loại với ngữ nghĩa giống
+    /// các vòng lặp tương ứng trong `clean_orphan_files`: xóa object, xóa bản ghi
+    /// `pending` quá hạn (kèm abort multipart nếu có), và abort phiên multipart
+    /// vô chủ.
     pub async fn delete_specific_orphans(
+        db: &Database,
         r2: &R2Service,
-        keys: Vec<String>,
+        body: DeleteOrphansBody,
     ) -> Result<DeleteOrphansResult, AppError> {
         let r2_objects = r2.list_all_objects().await.map_err(AppError::Internal)?;
         use std::collections::HashMap;
@@ -825,7 +968,7 @@ impl FileService {
         let mut deleted_count = 0;
         let mut freed_bytes: i64 = 0;
 
-        for key in keys {
+        for key in body.keys {
             let size = size_map.get(&key).copied().unwrap_or(0);
             if r2.delete_object(&key).await.is_ok() {
                 deleted_count += 1;
@@ -833,10 +976,192 @@ impl FileService {
             }
         }
 
+        let collection = db.collection::<File>("files");
+        let stale_cutoff = chrono::Utc::now()
+            - chrono::Duration::hours(STALE_PENDING_CUTOFF_HOURS);
+        let mut deleted_stale_pending = 0;
+
+        for id_str in body.file_ids {
+            let Ok(file_oid) = ObjectId::parse_str(&id_str) else {
+                continue;
+            };
+            let file = match collection.find_one(doc! { "_id": file_oid }).await {
+                Ok(Some(f)) => f,
+                _ => continue,
+            };
+            // Chỉ đụng bản ghi pending quá hạn: lời gọi đến muộn không được phá
+            // một upload thật đang chạy hoặc file đã hoàn tất.
+            if file.status != FileStatus::Pending || file.created_at >= stale_cutoff {
+                continue;
+            }
+            if let Some(upload_id) = &file.multipart_upload_id {
+                let _ = r2.abort_multipart_upload(&file.key, upload_id).await;
+            }
+            let _ = r2.delete_object(&file.key).await;
+            match collection
+                .delete_one(doc! {
+                    "_id": file_oid,
+                    "status": "pending",
+                    "createdAt": { "$lt": stale_cutoff },
+                })
+                .await
+            {
+                Ok(res) if res.deleted_count > 0 => deleted_stale_pending += 1,
+                _ => {}
+            }
+        }
+
+        // Phiên multipart vô chủ chỉ abort được; part của chúng không nằm trong
+        // danh sách object nên không tính được dung lượng giải phóng ở đây.
+        let mut aborted_multipart = 0;
+        for mp in body.multipart_refs {
+            if r2.abort_multipart_upload(&mp.key, &mp.upload_id).await.is_ok() {
+                aborted_multipart += 1;
+            }
+        }
+
         Ok(DeleteOrphansResult {
             deleted_count,
+            deleted_stale_pending,
+            aborted_multipart,
             freed_bytes,
             freed_formatted: crate::utils::file_display::format_bytes(freed_bytes),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    fn file(status: FileStatus, key: &str, created_at: chrono::DateTime<Utc>) -> File {
+        File {
+            id: Some(ObjectId::new()),
+            name: format!("ten-{key}"),
+            key: key.to_string(),
+            size: 1024,
+            mime_type: "application/octet-stream".to_string(),
+            external_url: None,
+            folder_id: None,
+            owner_id: "u1".to_string(),
+            is_public: false,
+            status,
+            multipart_upload_id: None,
+            views: 0,
+            downloads: 0,
+            created_at,
+            updated_at: created_at,
+        }
+    }
+
+    /// `now` phải là mốc mà dữ liệu test xây dựng theo, để cutoff không bị
+    /// trôi giữa lúc tạo dữ liệu và lúc phân loại.
+    fn scan(
+        files: Vec<File>,
+        objects: Vec<(String, i64)>,
+        uploads: Vec<(String, String, Option<chrono::DateTime<Utc>>)>,
+        now: chrono::DateTime<Utc>,
+    ) -> OrphanScanResult {
+        classify_orphans(&files, &objects, &uploads, now - Duration::hours(STALE_PENDING_CUTOFF_HOURS))
+    }
+
+    #[test]
+    fn object_co_ban_ghi_khong_phai_mo_coi_ke_ca_pending() {
+        // Object của upload đang chạy (pending non) không được tính là rác.
+        let now = Utc::now();
+        let res = scan(
+            vec![file(FileStatus::Pending, "u1/a.bin", now)],
+            vec![("u1/a.bin".to_string(), 100)],
+            vec![],
+            now,
+        );
+        assert!(res.orphan_objects.is_empty());
+        assert!(res.stale_pending_files.is_empty());
+    }
+
+    #[test]
+    fn object_khong_co_ban_ghi_bi_phat_hien() {
+        let res = scan(vec![], vec![("file-lac-loai.bin".to_string(), 42)], vec![], Utc::now());
+        assert_eq!(res.orphan_objects.len(), 1);
+        assert_eq!(res.orphan_objects[0].key, "file-lac-loai.bin");
+        assert_eq!(res.orphan_objects[0].name, "file-lac-loai.bin");
+        assert_eq!(res.orphan_objects[0].size, 42);
+    }
+
+    #[test]
+    fn pending_qua_han_moi_boc_liet_ke() {
+        let now = Utc::now();
+        let cutoff_nguon = now - Duration::hours(STALE_PENDING_CUTOFF_HOURS);
+        let muoi_phut_truoc = now - Duration::minutes(10);
+        let ba_ngay_truoc = now - Duration::days(3);
+
+        let res = scan(
+            vec![
+                file(FileStatus::Pending, "u1/non.bin", muoi_phut_truoc),
+                file(FileStatus::Pending, "u1/stale.bin", ba_ngay_truoc),
+                file(FileStatus::Completed, "u1/done.bin", ba_ngay_truoc),
+                // pending đúng ngưỡng: không tính rác (phải quá, không phải bằng)
+                file(FileStatus::Pending, "u1/exact.bin", cutoff_nguon),
+            ],
+            vec![],
+            vec![],
+            now,
+        );
+
+        let keys: Vec<&str> = res
+            .stale_pending_files
+            .iter()
+            .map(|f| f.key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["u1/stale.bin"], "chỉ pending quá 24h mới liệt kê");
+        assert!(res.stale_pending_files[0].file_id.len() == 24);
+    }
+
+    #[test]
+    fn multipart_co_ban_ghi_nhan_khong_vao_dangling() {
+        let upload_id = "upload-1".to_string();
+        let now = Utc::now();
+        let stale_time = now - Duration::days(2);
+
+        let mut f = file(FileStatus::Pending, "u1/key.bin", stale_time);
+        f.multipart_upload_id = Some(upload_id.clone());
+
+        let res = scan(
+            vec![f],
+            vec![],
+            vec![("u1/key.bin".to_string(), upload_id, Some(stale_time))],
+            now,
+        );
+
+        // Đã phủ bởi stale_pending_files; không liệt kê trùng ở dangling.
+        assert!(res.dangling_multipart.is_empty());
+        assert_eq!(res.stale_pending_files.len(), 1);
+        assert!(res.stale_pending_files[0].has_multipart);
+    }
+
+    #[test]
+    fn multipart_khong_ban_ghi_nhan_va_qua_han_vao_dangling() {
+        let now = Utc::now();
+        let stale_time = now - Duration::days(2);
+        let res = scan(
+            vec![],
+            vec![],
+            vec![
+                ("u1/orphan-mp.bin".to_string(), "upload-x".to_string(), Some(stale_time)),
+                // Không rõ thời điểm khởi tạo: bỏ qua, không abort nhầm.
+                ("u1/unknown.bin".to_string(), "upload-y".to_string(), None),
+                // Còn non: bỏ qua.
+                (
+                    "u1/fresh.bin".to_string(),
+                    "upload-z".to_string(),
+                    Some(now),
+                ),
+            ],
+            now,
+        );
+
+        assert_eq!(res.dangling_multipart.len(), 1);
+        assert_eq!(res.dangling_multipart[0].upload_id, "upload-x");
     }
 }

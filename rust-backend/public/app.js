@@ -985,7 +985,7 @@
   var btnCleanAllOrphansModal = document.getElementById('btn-clean-all-orphans-modal');
   var selectedOrphanCountEl = document.getElementById('selected-orphan-count');
 
-  var currentOrphans = [];
+  var currentOrphans = { orphanObjects: [], stalePendingFiles: [], danglingMultipart: [] };
 
   if (btnCleanOrphans && orphansModal) {
     btnCleanOrphans.addEventListener('click', function () {
@@ -1012,9 +1012,26 @@
       }
     }
 
+    function fmtDateTime(iso) {
+      var d = new Date(iso);
+      return isNaN(d.getTime()) ? '' : d.toLocaleString('vi-VN');
+    }
+
+    function orphanTableHead(extraCols) {
+      return '<table style="width:100%; border-collapse:collapse; font-size:13px;">' +
+        '<thead><tr style="background:#f9fafb; border-bottom:1px solid #e5e7eb;">' +
+        '<th style="width:36px; text-align:center; padding:8px;"><input type="checkbox" class="chk-select-all-orphans" /></th>' +
+        extraCols +
+        '</tr></thead><tbody>';
+    }
+
     function renderOrphansList() {
-      if (!currentOrphans || currentOrphans.length === 0) {
-        orphansListContainer.innerHTML = '<div style="text-align: center; padding: 24px; color: #22c55e;"><i class="fas fa-check-circle"></i> Sạch sẽ! Không có file mồ côi nào trên Cloudflare R2.</div>';
+      var objects = currentOrphans.orphanObjects || [];
+      var staleFiles = currentOrphans.stalePendingFiles || [];
+      var dangling = currentOrphans.danglingMultipart || [];
+
+      if (objects.length === 0 && staleFiles.length === 0 && dangling.length === 0) {
+        orphansListContainer.innerHTML = '<div style="text-align: center; padding: 24px; color: #22c55e;"><i class="fas fa-check-circle"></i> Sạch sẽ! Không phát hiện rác nào trên Cloudflare R2.</div>';
         btnCleanAllOrphansModal.style.display = 'none';
         btnDeleteSelectedOrphans.style.display = 'none';
         return;
@@ -1022,36 +1039,74 @@
 
       btnCleanAllOrphansModal.style.display = 'inline-flex';
 
-      var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">' +
-        '<thead><tr style="background:#f9fafb; border-bottom:1px solid #e5e7eb;">' +
-        '<th style="width:36px; text-align:center; padding:8px;"><input type="checkbox" id="chk-select-all-orphans" /></th>' +
-        '<th style="padding:8px; text-align:left;">Tên File trên R2</th>' +
-        '<th style="padding:8px; text-align:right; width:100px;">Kích thước</th>' +
-        '<th style="padding:8px; text-align:center; width:70px;">Hành động</th>' +
-        '</tr></thead><tbody>';
+      var html = '';
 
-      currentOrphans.forEach(function (item, idx) {
-        html += '<tr style="border-bottom:1px solid #f3f4f6;">' +
-          '<td style="text-align:center; padding:8px;"><input type="checkbox" class="chk-orphan-item" data-key="' + escapeHtml(item.key) + '" /></td>' +
-          '<td style="padding:8px; word-break:break-all;"><i class="fas fa-file-alt text-muted" style="margin-right:6px;"></i>' + escapeHtml(item.name) + '</td>' +
-          '<td style="padding:8px; text-align:right; color:#4b5563;">' + escapeHtml(item.sizeFormatted) + '</td>' +
-          '<td style="padding:8px; text-align:center;"><button class="btn-icon btn-danger btn-delete-single-orphan" data-key="' + escapeHtml(item.key) + '" title="Xoá file này"><i class="fas fa-trash"></i></button></td>' +
-          '</tr>';
-      });
+      if (objects.length > 0) {
+        html += '<div style="font-weight:600; font-size:13px; margin:8px 0 4px;">File trên R2 không có bản ghi trong Database (' + objects.length + ')</div>';
+        html += orphanTableHead(
+          '<th style="padding:8px; text-align:left;">Tên File trên R2</th>' +
+          '<th style="padding:8px; text-align:right; width:100px;">Kích thước</th>' +
+          '<th style="padding:8px; text-align:center; width:70px;">Hành động</th>'
+        );
+        objects.forEach(function (item) {
+          html += '<tr style="border-bottom:1px solid #f3f4f6;">' +
+            '<td style="text-align:center; padding:8px;"><input type="checkbox" class="chk-orphan-item" data-kind="object" data-key="' + escapeHtml(item.key) + '" /></td>' +
+            '<td style="padding:8px; word-break:break-all;"><i class="fas fa-file-alt text-muted" style="margin-right:6px;"></i>' + escapeHtml(item.name) + '</td>' +
+            '<td style="padding:8px; text-align:right; color:#4b5563;">' + escapeHtml(item.sizeFormatted) + '</td>' +
+            '<td style="padding:8px; text-align:center;"><button class="btn-icon btn-danger btn-delete-single-orphan" data-key="' + escapeHtml(item.key) + '" title="Xoá file này"><i class="fas fa-trash"></i></button></td>' +
+            '</tr>';
+        });
+        html += '</tbody></table>';
+      }
 
-      html += '</tbody></table>';
+      if (staleFiles.length > 0) {
+        html += '<div style="font-weight:600; font-size:13px; margin:16px 0 4px;">Upload dở dang đã quá 24 giờ (' + staleFiles.length + ')</div>';
+        html += orphanTableHead(
+          '<th style="padding:8px; text-align:left;">Tên file</th>' +
+          '<th style="padding:8px; text-align:right; width:100px;">Kích thước</th>' +
+          '<th style="padding:8px; text-align:left; width:150px;">Tạo lúc</th>'
+        );
+        staleFiles.forEach(function (item) {
+          html += '<tr style="border-bottom:1px solid #f3f4f6;">' +
+            '<td style="text-align:center; padding:8px;"><input type="checkbox" class="chk-orphan-item" data-kind="stale" data-file-id="' + escapeHtml(item.fileId) + '" /></td>' +
+            '<td style="padding:8px; word-break:break-all;"><i class="fas fa-file-upload text-muted" style="margin-right:6px;"></i>' + escapeHtml(item.name) +
+            (item.hasMultipart ? ' <span style="font-size:11px; background:#fef3c7; color:#92400e; padding:1px 6px; border-radius:8px;">multipart</span>' : '') + '</td>' +
+            '<td style="padding:8px; text-align:right; color:#4b5563;">' + escapeHtml(item.sizeFormatted) + '</td>' +
+            '<td style="padding:8px; color:#6b7280;">' + escapeHtml(fmtDateTime(item.createdAt)) + '</td>' +
+            '</tr>';
+        });
+        html += '</tbody></table>';
+      }
+
+      if (dangling.length > 0) {
+        html += '<div style="font-weight:600; font-size:13px; margin:16px 0 4px;">Phiên multipart treo trên R2 (' + dangling.length + ')</div>';
+        html += orphanTableHead(
+          '<th style="padding:8px; text-align:left;">Key trên R2</th>' +
+          '<th style="padding:8px; text-align:left; width:150px;">Bắt đầu lúc</th>'
+        );
+        dangling.forEach(function (item) {
+          html += '<tr style="border-bottom:1px solid #f3f4f6;">' +
+            '<td style="text-align:center; padding:8px;"><input type="checkbox" class="chk-orphan-item" data-kind="multipart" data-key="' + escapeHtml(item.key) + '" data-upload-id="' + escapeHtml(item.uploadId) + '" /></td>' +
+            '<td style="padding:8px; word-break:break-all;"><i class="fas fa-layer-group text-muted" style="margin-right:6px;"></i>' + escapeHtml(item.key) + '</td>' +
+            '<td style="padding:8px; color:#6b7280;">' + escapeHtml(item.initiated ? fmtDateTime(item.initiated) : '—') + '</td>' +
+            '</tr>';
+        });
+        html += '</tbody></table>';
+      }
+
       orphansListContainer.innerHTML = html;
 
       // Bind events
-      var chkAll = document.getElementById('chk-select-all-orphans');
       var itemChks = document.querySelectorAll('.chk-orphan-item');
 
-      if (chkAll) {
+      // Mỗi bảng một checkbox "chọn tất cả", chỉ tác động lên bảng của nó
+      document.querySelectorAll('.chk-select-all-orphans').forEach(function (chkAll) {
         chkAll.addEventListener('change', function () {
-          itemChks.forEach(function (chk) { chk.checked = chkAll.checked; });
+          var table = chkAll.closest('table');
+          table.querySelectorAll('.chk-orphan-item').forEach(function (chk) { chk.checked = chkAll.checked; });
           updateSelectedOrphansCount();
         });
-      }
+      });
 
       itemChks.forEach(function (chk) {
         chk.addEventListener('change', updateSelectedOrphansCount);
@@ -1059,8 +1114,7 @@
 
       document.querySelectorAll('.btn-delete-single-orphan').forEach(function (btn) {
         btn.addEventListener('click', function () {
-          var key = btn.getAttribute('data-key');
-          deleteOrphanKeys([key]);
+          deleteOrphanItems({ keys: [btn.getAttribute('data-key')], fileIds: [], multipartRefs: [] });
         });
       });
     }
@@ -1076,33 +1130,51 @@
       }
     }
 
-    async function deleteOrphanKeys(keys) {
-      if (!keys || keys.length === 0) return;
-      if (!confirm('Xoá ' + keys.length + ' file mồ côi đã chọn khỏi Cloudflare R2?')) return;
+    // Gom các checkbox đã chọn thành ba mảng đúng dạng DeleteOrphansBody
+    function collectSelectedOrphanItems() {
+      var keys = [];
+      var fileIds = [];
+      var multipartRefs = [];
+      document.querySelectorAll('.chk-orphan-item:checked').forEach(function (chk) {
+        var kind = chk.getAttribute('data-kind');
+        if (kind === 'object') {
+          keys.push(chk.getAttribute('data-key'));
+        } else if (kind === 'stale') {
+          fileIds.push(chk.getAttribute('data-file-id'));
+        } else if (kind === 'multipart') {
+          multipartRefs.push({ key: chk.getAttribute('data-key'), uploadId: chk.getAttribute('data-upload-id') });
+        }
+      });
+      return { keys: keys, fileIds: fileIds, multipartRefs: multipartRefs };
+    }
+
+    async function deleteOrphanItems(items) {
+      var total = items.keys.length + items.fileIds.length + items.multipartRefs.length;
+      if (total === 0) return;
+      if (!confirm('Xoá ' + total + ' mục rác đã chọn khỏi Cloudflare R2?')) return;
 
       try {
         var res = await apiCall('/api/files/storage/orphans', {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keys: keys }),
+          body: JSON.stringify(items),
         });
 
-        showToast('Đã xoá ' + res.deletedCount + ' file (' + res.freedFormatted + ')', 'success');
+        var parts = [];
+        if (res.deletedCount > 0) parts.push(res.deletedCount + ' file R2');
+        if (res.deletedStalePending > 0) parts.push(res.deletedStalePending + ' bản ghi upload dở');
+        if (res.abortedMultipart > 0) parts.push(res.abortedMultipart + ' phiên multipart');
+        showToast('Đã xoá ' + parts.join(', ') + ' (' + res.freedFormatted + ')', 'success');
         await loadOrphanFiles();
         await loadStorageQuota();
       } catch (err) {
-        showToast(err.message || 'Lỗi xoá file', 'error');
+        showToast(err.message || 'Lỗi xoá rác', 'error');
       }
     }
 
     if (btnDeleteSelectedOrphans) {
       btnDeleteSelectedOrphans.addEventListener('click', function () {
-        var selected = document.querySelectorAll('.chk-orphan-item:checked');
-        var keys = [];
-        selected.forEach(function (chk) {
-          keys.push(chk.getAttribute('data-key'));
-        });
-        deleteOrphanKeys(keys);
+        deleteOrphanItems(collectSelectedOrphanItems());
       });
     }
 
@@ -1112,12 +1184,15 @@
         try {
           btnCleanAllOrphansModal.disabled = true;
           var res = await apiCall('/api/files/storage/clean-orphans', { method: 'POST' });
-          var summary = 'Đã xoá ' + res.deletedOrphanR2Objects + ' file mồ côi (' + res.freedFormatted + ')';
-          // Multipart treo không nằm trong danh sách object nên không hiện ở
-          // bảng file mồ côi, nhưng vẫn tốn dung lượng — phải báo riêng.
-          if (res.abortedStaleMultipartUploads > 0) {
-            summary += ', huỷ ' + res.abortedStaleMultipartUploads + ' phiên upload dở dang';
-          }
+          // Báo đủ ba loại rác đã dọn — bản cũ chỉ báo file R2 và multipart,
+          // sót số bản ghi pending bị xoá.
+          var summaryParts = [];
+          if (res.deletedOrphanR2Objects > 0) summaryParts.push(res.deletedOrphanR2Objects + ' file R2');
+          if (res.deletedStalePendingRecords > 0) summaryParts.push(res.deletedStalePendingRecords + ' bản ghi upload dở');
+          if (res.abortedStaleMultipartUploads > 0) summaryParts.push(res.abortedStaleMultipartUploads + ' phiên multipart');
+          var summary = summaryParts.length === 0
+            ? 'Không còn rác nào để dọn'
+            : 'Đã xoá ' + summaryParts.join(', ') + ' (' + res.freedFormatted + ')';
           showToast(summary, 'success');
           await loadOrphanFiles();
           await loadStorageQuota();

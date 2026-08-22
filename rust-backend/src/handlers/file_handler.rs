@@ -9,7 +9,7 @@ use crate::extractors::auth::{AuthUser, OptionalAuthUser};
 use crate::models::file::File;
 use crate::services::file_service::{
     CleanOrphanResult, CompleteMultipartBody, DeleteOrphansBody, DeleteOrphansResult, FileService,
-    OrphanFileInfo, PartUrlsResult, StorageQuotaResult, UploadUrlResult,
+    OrphanScanResult, PartUrlsResult, StorageQuotaResult, UploadUrlResult,
 };
 use crate::AppState;
 
@@ -322,7 +322,7 @@ pub async fn clean_orphan_files(
 pub async fn list_orphan_files(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
-) -> Result<Json<Vec<OrphanFileInfo>>, AppError> {
+) -> Result<Json<OrphanScanResult>, AppError> {
     let list = FileService::list_orphan_files(&state.db, &state.r2).await?;
     Ok(Json(list))
 }
@@ -332,6 +332,6 @@ pub async fn delete_specific_orphans(
     AuthUser(_user): AuthUser,
     Json(body): Json<DeleteOrphansBody>,
 ) -> Result<Json<DeleteOrphansResult>, AppError> {
-    let result = FileService::delete_specific_orphans(&state.r2, body.keys).await?;
+    let result = FileService::delete_specific_orphans(&state.db, &state.r2, body).await?;
     Ok(Json(result))
 }
